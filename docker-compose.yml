@@ -19,6 +19,7 @@ services:
       - ./crews:/app/crews
       - ./tools:/app/tools
       - ./custom_tools:/app/custom_tools
+      - ./frontend/dist:/app/frontend/dist
     ports:
       - "127.0.0.1:8001:8001"
     extra_hosts:
