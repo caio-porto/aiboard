@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" fill="none">
+  <defs>
+    <linearGradient id="aiboard-fav-grad" x1="8" y1="8" x2="80" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#16422B"/>
+      <stop offset="100%" stop-color="#0F2E1E"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="76" height="76" rx="22" fill="url(#aiboard-fav-grad)"/>
+  <path d="M28 60L44 26L60 60" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M34 49H54" stroke="#34D399" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="44" cy="24" r="6" fill="#34D399"/>
+  <circle cx="27" cy="61" r="5" fill="#FFFFFF"/>
+  <circle cx="61" cy="61" r="5" fill="#FFFFFF"/>
+</svg>

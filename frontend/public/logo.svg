@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 88" fill="none">
+  <defs>
+    <linearGradient id="aiboard-grad" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#16422B"/>
+      <stop offset="100%" stop-color="#0F2E1E"/>
+    </linearGradient>
+    <linearGradient id="aiboard-accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="72" height="72" rx="20" fill="url(#aiboard-grad)"/>
+  <path d="M30 56L44 28L58 56" stroke="#FFFFFF" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M35 47H53" stroke="#34D399" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="44" cy="26" r="5" fill="url(#aiboard-accent)"/>
+  <circle cx="29" cy="57" r="4.5" fill="#FFFFFF"/>
+  <circle cx="59" cy="57" r="4.5" fill="#FFFFFF"/>
+  <text x="96" y="49" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="34" font-weight="900" letter-spacing="-0.03em" fill="#16422B">AI Board</text>
+  <text x="98" y="68" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="700" letter-spacing="0.14em" fill="#5A6B61">AUTONOMOUS AGENT STUDIO</text>
+</svg>

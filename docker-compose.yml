@@ -1,0 +1,84 @@
+services:
+  crewai-api:
+    build: .
+    container_name: crewai-api
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    command: python -m api.main
+    env_file:
+      - .env
+    environment:
+      - API_PORT=8001
+      - TZ=America/Sao_Paulo
+    volumes:
+      - ./data:/app/data
+      - ./api:/app/api
+      - ./crews:/app/crews
+      - ./tools:/app/tools
+      - ./custom_tools:/app/custom_tools
+    ports:
+      - "127.0.0.1:8001:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+
+  crewai-web:
+    build: .
+    container_name: crewai-web
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    command: streamlit run web/app.py --server.port 8501 --server.address 0.0.0.0
+    env_file:
+      - .env
+    environment:
+      - API_INTERNAL_URL=http://crewai-api:8001
+      - TZ=America/Sao_Paulo
+    volumes:
+      - ./data:/app/data
+      - ./web:/app/web
+      - ./crews:/app/crews
+      - ./tools:/app/tools
+      - ./custom_tools:/app/custom_tools
+      - ./.streamlit:/app/.streamlit
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      - crewai-api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  crewai-bot:
+    build: .
+    container_name: crewai-bot
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    command: python -m bot.telegram_bot
+    env_file:
+      - .env
+    environment:
+      - API_INTERNAL_URL=http://crewai-api:8001
+      - TZ=America/Sao_Paulo
+    volumes:
+      - ./data:/app/data
+      - ./bot:/app/bot
+      - ./crews:/app/crews
+      - ./tools:/app/tools
+      - ./custom_tools:/app/custom_tools
+    depends_on:
+      - crewai-api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  default:
+    name: crewai_default
