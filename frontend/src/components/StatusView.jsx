@@ -2141,7 +2141,7 @@ export function StatusView({ user }) {
                 <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
                   pendingActions.length > 0 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-500'
                 }`}>
-                  {pendingActions.length} pendente{pendingActions.length !== 1 ? 's' : ''}
+                  {`${pendingActions.length} pendente${pendingActions.length !== 1 ? 's' : ''}`}
                 </span>
               </h3>
               <button
@@ -2800,7 +2800,7 @@ export function StatusView({ user }) {
                   </h2>
                   {microservicesData?.online_count !== undefined && (
                     <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900">
-                      {microservicesData.online_count} Online • {microservicesData.total} Monitorados
+                      {`${microservicesData.online_count} Online • ${microservicesData.total} Monitorados`}
                     </span>
                   )}
                 </div>
@@ -2808,7 +2808,7 @@ export function StatusView({ user }) {
                   Diagnóstico ativo de latência e conectividade de todas as APIs, bancos de dados e sistemas integrados à AI Board
                   {microservicesData?.checked_at_human && (
                     <span className="ml-1 font-semibold text-[#16422B]">
-                      • Última verificação: {microservicesData.checked_at_human}
+                      {`• Última verificação: ${microservicesData.checked_at_human}`}
                     </span>
                   )}
                 </p>
@@ -3064,7 +3064,7 @@ export function StatusView({ user }) {
                     >
                       {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
                         <option key={d} value={d}>
-                          Todo dia {d === 1 ? '1º' : d} do mês
+                          {`Todo dia ${d === 1 ? '1º' : d} do mês`}
                         </option>
                       ))}
                     </select>

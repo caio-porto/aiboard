@@ -134,6 +134,24 @@ function translateSingleLine(line, lang) {
     }
   }
 
+  // Check if it has a trailing parenthesized badge/department like "Role Name (CFO)" or "Online (115 chamados)"
+  const parenMatch = norm.match(/^(.+?)\s+\(([^()]+)\)$/);
+  if (parenMatch) {
+    const basePart = parenMatch[1].trim();
+    const parenPart = parenMatch[2].trim();
+    const baseLookup = NORMALIZED_PHRASE_MAP.get(basePart);
+    if (baseLookup) {
+      const translatedBase = lang === 'es' ? baseLookup[1] : baseLookup[0];
+      const parenLookup = NORMALIZED_PHRASE_MAP.get(parenPart);
+      const translatedParen = parenLookup
+        ? (lang === 'es' ? parenLookup[1] : parenLookup[0])
+        : (parenPart === 'LOGISTICA'
+            ? (lang === 'es' ? 'LOGÍSTICA' : 'LOGISTICS')
+            : (parenPart === 'GERAL' ? 'GENERAL' : translateSingleLine(parenPart, lang)));
+      return `${leading}${translatedBase} (${translatedParen})${trailing}`;
+    }
+  }
+
   // Apply pattern / phrase / word replacements
   const rules = lang === 'es' ? WORD_REPLACEMENTS_ES : WORD_REPLACEMENTS_EN;
   let result = norm;
@@ -184,8 +202,31 @@ export function translateText(text, params = null, langOverride = null) {
   return interpolateParams(translateSingleLine(text, lang), params);
 }
 
-const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE', 'PRE', 'TEXTAREA']);
+const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'PRE', 'TEXTAREA']);
 const TRANSLATABLE_ATTRS = ['placeholder', 'title', 'aria-label'];
+
+function processElementAttrsOnly(el, lang) {
+  if (!el || el.nodeType !== 1 || SKIP_TAGS.has(el.tagName)) return;
+  for (const attr of TRANSLATABLE_ATTRS) {
+    if (!el.hasAttribute(attr)) continue;
+    const curAttr = el.getAttribute(attr);
+    if (!curAttr || !curAttr.trim()) continue;
+    const origKey = `__i18nOrig_${attr}`;
+    const rendKey = `__i18nRend_${attr}`;
+    const langKey = `__i18nLang_${attr}`;
+    if (curAttr === el[rendKey] && el[langKey] === lang) continue;
+    if (curAttr !== el[rendKey]) {
+      el[origKey] = curAttr;
+    }
+    const orig = el[origKey] ?? curAttr;
+    const nextVal = lang === 'pt-BR' ? orig : translateText(orig, null, lang);
+    el[rendKey] = nextVal;
+    el[langKey] = lang;
+    if (curAttr !== nextVal) {
+      el.setAttribute(attr, nextVal);
+    }
+  }
+}
 
 function translateDomSubtree(rootNode, lang) {
   if (!rootNode || typeof document === 'undefined') return;
@@ -197,6 +238,7 @@ function translateDomSubtree(rootNode, lang) {
 
     const currentVal = textNode.nodeValue;
     if (!currentVal || !currentVal.trim()) return;
+    if (currentVal === textNode.__i18nRendered && textNode.__i18nLang === lang) return;
 
     if (currentVal !== textNode.__i18nRendered) {
       textNode.__i18nOrig = currentVal;
@@ -204,28 +246,9 @@ function translateDomSubtree(rootNode, lang) {
     const orig = textNode.__i18nOrig ?? currentVal;
     const nextVal = lang === 'pt-BR' ? orig : translateText(orig, null, lang);
     textNode.__i18nRendered = nextVal;
+    textNode.__i18nLang = lang;
     if (textNode.nodeValue !== nextVal) {
       textNode.nodeValue = nextVal;
-    }
-  };
-
-  const processElementAttrs = (el) => {
-    if (!el || el.nodeType !== 1 || SKIP_TAGS.has(el.tagName)) return;
-    for (const attr of TRANSLATABLE_ATTRS) {
-      if (!el.hasAttribute(attr)) continue;
-      const curAttr = el.getAttribute(attr);
-      if (!curAttr || !curAttr.trim()) continue;
-      const origKey = `__i18nOrig_${attr}`;
-      const rendKey = `__i18nRend_${attr}`;
-      if (curAttr !== el[rendKey]) {
-        el[origKey] = curAttr;
-      }
-      const orig = el[origKey] ?? curAttr;
-      const nextVal = lang === 'pt-BR' ? orig : translateText(orig, null, lang);
-      el[rendKey] = nextVal;
-      if (curAttr !== nextVal) {
-        el.setAttribute(attr, nextVal);
-      }
     }
   };
 
@@ -235,7 +258,7 @@ function translateDomSubtree(rootNode, lang) {
   }
 
   if (rootNode.nodeType === 1) {
-    processElementAttrs(rootNode);
+    processElementAttrsOnly(rootNode, lang);
   }
 
   const walker = document.createTreeWalker(
@@ -248,7 +271,7 @@ function translateDomSubtree(rootNode, lang) {
     if (node.nodeType === 3) {
       processTextNode(node);
     } else if (node.nodeType === 1) {
-      processElementAttrs(node);
+      processElementAttrsOnly(node, lang);
     }
     node = walker.nextNode();
   }
@@ -281,6 +304,7 @@ export function LanguageProvider({ user, children }) {
 
     let rafId = null;
     const pendingNodes = new Set();
+    const pendingAttrElements = new Set();
 
     const flushMutations = () => {
       rafId = null;
@@ -288,6 +312,10 @@ export function LanguageProvider({ user, children }) {
         translateDomSubtree(n, lang);
       }
       pendingNodes.clear();
+      for (const el of pendingAttrElements) {
+        processElementAttrsOnly(el, lang);
+      }
+      pendingAttrElements.clear();
     };
 
     const observer = new MutationObserver((mutations) => {
@@ -302,11 +330,14 @@ export function LanguageProvider({ user, children }) {
               pendingNodes.add(n);
             }
           });
-        } else if (m.type === 'attributes' && m.target) {
-          pendingNodes.add(m.target);
+        } else if (m.type === 'attributes' && m.target && m.attributeName) {
+          const curVal = m.target.getAttribute(m.attributeName);
+          if (curVal !== m.target[`__i18nRend_${m.attributeName}`]) {
+            pendingAttrElements.add(m.target);
+          }
         }
       }
-      if (pendingNodes.size > 0 && !rafId) {
+      if ((pendingNodes.size > 0 || pendingAttrElements.size > 0) && !rafId) {
         rafId = requestAnimationFrame(flushMutations);
       }
     });
