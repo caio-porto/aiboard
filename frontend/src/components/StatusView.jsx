@@ -193,6 +193,11 @@ export function StatusView({ user }) {
       isProgrammaticScroll.current = false;
     }, 800);
 
+    const navBtn = document.getElementById(`nav-btn-${sectionId}`);
+    if (navBtn) {
+      navBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+
     const container = scrollContainerRef.current;
     const el = document.getElementById(sectionId);
     if (container && el) {
@@ -225,7 +230,12 @@ export function StatusView({ user }) {
 
           // Se estiver perto do final do scroll, seleciona a última seção
           if (container.scrollHeight - container.scrollTop <= container.clientHeight + 80) {
-            setActiveSection(sectionIds[sectionIds.length - 1]);
+            const lastId = sectionIds[sectionIds.length - 1];
+            setActiveSection(lastId);
+            const navBtn = document.getElementById(`nav-btn-${lastId}`);
+            if (navBtn) {
+              navBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }
             ticking = false;
             return;
           }
@@ -243,6 +253,10 @@ export function StatusView({ user }) {
           }
 
           setActiveSection(currentSection);
+          const navBtn = document.getElementById(`nav-btn-${currentSection}`);
+          if (navBtn) {
+            navBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+          }
           ticking = false;
         });
         ticking = true;
@@ -1125,23 +1139,27 @@ export function StatusView({ user }) {
             <div className="text-[10px] text-[#5A6B61] truncate">{t('status.quickNav')}</div>
           </div>
 
-          <nav className="flex md:flex-col gap-1 overflow-x-auto md:overflow-visible pb-1 md:pb-0">
+          <nav
+            className="flex md:flex-col gap-1.5 md:gap-1 overflow-x-auto md:overflow-visible pb-1 md:pb-0 scroll-smooth"
+            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          >
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeSection === item.id;
               return (
                 <button
                   key={item.id}
+                  id={`nav-btn-${item.id}`}
                   type="button"
                   onClick={() => scrollToSection(item.id)}
-                  className={`flex items-center gap-2 px-2.5 py-2 md:gap-2.5 md:px-3 md:py-2.5 rounded-xl md:rounded-2xl text-xs font-bold transition whitespace-nowrap cursor-pointer text-left min-w-0 ${
+                  className={`shrink-0 flex items-center gap-2 px-3 py-2 md:gap-2.5 md:px-3 md:py-2.5 rounded-xl md:rounded-2xl text-xs font-bold transition whitespace-nowrap cursor-pointer text-left ${
                     isActive
                       ? 'bg-[#16422B] text-white shadow-xs'
-                      : 'text-[#3A4A40] hover:bg-[#EFF5F1] hover:text-[#16422B]'
+                      : 'bg-[#EFF5F1] md:bg-transparent text-[#3A4A40] hover:bg-[#E2E8E4] md:hover:bg-[#EFF5F1] hover:text-[#16422B]'
                   }`}
                 >
                   <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-emerald-300' : 'text-[#16422B]'}`} />
-                  <span className="truncate">{item.label}</span>
+                  <span className="whitespace-nowrap">{item.label}</span>
                 </button>
               );
             })}
