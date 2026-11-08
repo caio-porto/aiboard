@@ -172,6 +172,33 @@ flowchart TB
 
 ---
 
+## 📱 Mobile Web App & Push Notifications (PWA)
+
+AI Board runs as an **installable Progressive Web App (PWA)** on any mobile device (Android & iOS). Similar to Antigravity, executives and operators can install the app on their home screen and receive instant notifications when autonomous agents finish answering chat questions.
+
+### 📲 How to Install on Mobile
+
+#### Android (Google Chrome, Edge, Samsung Internet)
+1. Open your AI Board URL in your mobile browser (e.g. `https://ai.yourdomain.com`).
+2. A prompt button **"Install on Phone"** appears automatically in the top navigation bar. Tap it and confirm **Install**.
+3. Or tap the browser menu (⋮) and select **"Add to Home screen"** / **"Install app"**.
+4. The AI Board app icon will appear directly on your home screen with a standalone, full-screen mobile experience.
+
+#### iPhone & iPad (Apple Safari on iOS 16.4+)
+1. Open your AI Board URL in **Safari**.
+2. Tap the **Share** button (the square icon with an upward arrow at the bottom of the screen).
+3. Scroll down and tap **"Add to Home Screen"** (`Adicionar à Tela de Início`).
+4. Tap **Add** in the top right corner.
+5. The AI Board app is now installed on your iOS home screen with native push notification support.
+
+### 🔔 Mobile Notifications when Agents Respond
+- **One-Click Activation**: In the Chat Console, tap the bell icon (`🔔`) or the invitation banner to allow notifications.
+- **Background Delivery**: Send a complex question to your autonomous crew, close your phone or switch to other apps. As soon as the agent finishes executing tools and writing the response, your phone receives a native notification with sound and tactile vibration.
+- **Deep Linking**: Tapping the notification automatically wakes up the AI Board app and jumps straight to the corresponding conversation.
+- **Universal Compatibility**: Powered by the W3C Web Notification API and high-performance Service Worker (`sw.js`), ensuring zero dependency on third-party proprietary mobile app stores.
+
+---
+
 ## 📦 All Dependencies
 
 ### 1. System & OS Requirements
