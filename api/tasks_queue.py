@@ -2011,13 +2011,87 @@ def _worker_execute_task(task_id: str, crew_name: str, prompt: str, telegram_cha
                     except Exception:
                         active_topo = topology_snapshot
 
-            # 5. Malha de Segurança & Resiliência (`llm_auto_fallback_enabled` + `max_retry_attempts`)
+            # 5. Malha de Segurança & Resiliência (`llm_auto_fallback_enabled` + `max_retry_attempts` + Auto-Reparo de Módulos)
             fallback_on = str(get_setting("llm_auto_fallback_enabled", "false")).lower() in ("true", "1", "yes")
             try:
-                max_attempts = int(get_setting("max_retry_attempts") or (3 if fallback_on else 1))
+                max_attempts = int(get_setting("max_retry_attempts") or (3 if fallback_on else 2))
             except Exception:
-                max_attempts = 3 if fallback_on else 1
-            max_attempts = max(1, min(max_attempts, 4))
+                max_attempts = 3 if fallback_on else 2
+            max_attempts = max(2, min(max_attempts, 4))
+
+            def _attempt_runtime_self_heal(err_obj: Exception) -> bool:
+                """Auto-repara em tempo real falhas de ModuleNotFoundError (ponte tools <-> custom_tools ou pacotes pip)."""
+                err_txt = str(err_obj or "")
+                if not isinstance(err_obj, (ModuleNotFoundError, ImportError)) and "No module named" not in err_txt:
+                    return False
+                import re as _re_mod
+                import sys as _sys_mod
+                import importlib as _il_mod
+                import subprocess as _sp_mod
+                m_mod = _re_mod.search(r"No module named ['\"]([^'\"]+)['\"]", err_txt)
+                if not m_mod:
+                    return False
+                missing_name = m_mod.group(1).strip()
+
+                # Caso A: Ponte automática entre tools.<submod> e custom_tools.<submod>
+                if missing_name.startswith("tools.") or missing_name.startswith("custom_tools."):
+                    parts = missing_name.split(".", 1)
+                    alt_pkg = "custom_tools" if parts[0] == "tools" else "tools"
+                    alt_name = f"{alt_pkg}.{parts[1]}"
+                    try:
+                        import tools as _t_pkg
+                        _ct_dir = os.path.abspath(os.path.join(os.path.dirname(_t_pkg.__file__), "..", "custom_tools"))
+                        if os.path.isdir(_ct_dir) and _ct_dir not in _t_pkg.__path__:
+                            _t_pkg.__path__.append(_ct_dir)
+                        _il_mod.invalidate_caches()
+                        mod_loaded = _il_mod.import_module(alt_name)
+                        _sys_mod.modules[missing_name] = mod_loaded
+                        log_task_event(
+                            task_id,
+                            f"🔧 [Auto-Reparo Antigravity] Módulo '{missing_name}' redirecionado automaticamente para '{alt_name}'. Retomando execução...",
+                            level="INFO",
+                            agent_name="Motor de Auto-Reparo"
+                        )
+                        return True
+                    except Exception as bridge_err:
+                        logger.warning(f"Falha ao redirecionar módulo {missing_name} -> {alt_name}: {bridge_err}")
+
+                # Caso B: Instalação automática de dependências Python de runtime ausentes no container
+                base_mod = missing_name.split(".")[0].lower()
+                pip_map = {
+                    "playwright": "playwright>=1.40.0",
+                    "pymysql": "pymysql>=1.1.0",
+                    "psycopg2": "psycopg2-binary>=2.9.9",
+                    "openpyxl": "openpyxl>=3.1.0",
+                    "bs4": "beautifulsoup4>=4.12.0",
+                }
+                if base_mod in pip_map:
+                    pkg_spec = pip_map[base_mod]
+                    log_task_event(
+                        task_id,
+                        f"🔧 [Auto-Reparo Antigravity] Dependência '{base_mod}' ausente. Instalando '{pkg_spec}' automaticamente...",
+                        level="INFO",
+                        agent_name="Motor de Auto-Reparo"
+                    )
+                    try:
+                        _sp_mod.run(
+                            [_sys_mod.executable, "-m", "pip", "install", "--quiet", pkg_spec],
+                            capture_output=True,
+                            text=True,
+                            timeout=90,
+                        )
+                        if base_mod == "playwright":
+                            _sp_mod.run(
+                                [_sys_mod.executable, "-m", "playwright", "install", "chromium"],
+                                capture_output=True,
+                                text=True,
+                                timeout=120,
+                            )
+                        _il_mod.invalidate_caches()
+                        return True
+                    except Exception as pip_err:
+                        logger.warning(f"Falha ao auto-instalar pacote {pkg_spec}: {pip_err}")
+                return False
 
             last_err = None
             res_out = None
@@ -2035,17 +2109,19 @@ def _worker_execute_task(task_id: str, crew_name: str, prompt: str, telegram_cha
                     break
                 except Exception as crew_err:
                     last_err = crew_err
-                    if attempt < max_attempts and fallback_on:
-                        backoff_sec = 2 * attempt
-                        log_task_event(
-                            task_id,
-                            f"🛡️ [Malha de Resiliência Antigravity] Tentativa {attempt}/{max_attempts} falhou ({str(crew_err)[:120]}). Acionando retry com fallback em {backoff_sec}s...",
-                            level="WARNING",
-                            agent_name="Guardrail de Resiliência"
-                        )
+                    healed_now = _attempt_runtime_self_heal(crew_err) if attempt < max_attempts else False
+                    if attempt < max_attempts and (healed_now or fallback_on):
+                        backoff_sec = 1 if healed_now else (2 * attempt)
+                        if not healed_now:
+                            log_task_event(
+                                task_id,
+                                f"🛡️ [Malha de Resiliência Antigravity] Tentativa {attempt}/{max_attempts} falhou ({str(crew_err)[:120]}). Acionando retry com fallback em {backoff_sec}s...",
+                                level="WARNING",
+                                agent_name="Guardrail de Resiliência"
+                            )
                         time.sleep(backoff_sec)
-                        # Na retentativa, força fallback de modelo leve para evitar 429/503
-                        if isinstance(active_topo, dict):
+                        # Na retentativa por erro de LLM, força fallback de modelo leve para evitar 429/503
+                        if not healed_now and isinstance(active_topo, dict):
                             try:
                                 active_topo = json.loads(json.dumps(active_topo))
                                 for node in active_topo.get("nodes", []):
@@ -2216,6 +2292,13 @@ def _worker_execute_task(task_id: str, crew_name: str, prompt: str, telegram_cha
             severity="ERROR",
             source=f"agent_task:{task_id}"
         )
+
+        # Aciona imediatamente o Meta-Agente Antigravity em background para diagnóstico e auto-reparo
+        try:
+            from api.evolution_agent import trigger_reactive_self_healing_async
+            trigger_reactive_self_healing_async(task_id, err_msg)
+        except Exception as evo_trig_err:
+            logger.debug(f"Aviso ao acionar auto-reparo reativo pós-falha: {evo_trig_err}")
     finally:
         unlock_execution_mutex()
 

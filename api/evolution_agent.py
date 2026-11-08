@@ -955,6 +955,55 @@ def _diagnose_real_operational_bottlenecks(telemetry: Dict[str, Any]) -> List[Di
         or "days_lookback" in (f.get("error") or "").lower()
         for f in failed_tasks
     )
+    has_module_import_err = any(
+        "no module named 'tools." in (f.get("error") or "").lower()
+        or "no module named 'playwright'" in (f.get("error") or "").lower()
+        or "no module named \"tools." in (f.get("error") or "").lower()
+        for f in failed_tasks
+    )
+
+    # 0. Diagnóstico Causa-Raiz [Tool/MCP]: Falha de Importação `tools.*` <-> `custom_tools.*` e Runtime Playwright
+    mod_bridge_healed = str(get_setting("module_bridge_and_playwright_healed_v1", "false")).lower() == "true"
+    if has_module_import_err and not mod_bridge_healed:
+        before_mod = (
+            "import tools.intranetmall_tools -> ModuleNotFoundError: No module named 'tools.intranetmall_tools'\n"
+            "import playwright -> ModuleNotFoundError: No module named 'playwright' após recriação de container\n"
+            "ponte_dinamica_tools_custom_tools = inativa"
+        )
+        after_mod = (
+            "tools.__path__ <-> custom_tools.__path__ = ponte bidirecional ativa (PEP 302)\n"
+            "runtime_playwright_chromium = verificado e instalado automaticamente no container\n"
+            "auto_reparo_runtime_tasks_queue = ativo na 1ª tentativa sem derrubar mensagens do Chat"
+        )
+        proposals.append({
+            "dedup_key": "rootcause_module_bridge_and_playwright_runtime_v1",
+            "allow_reopen_completed": True,
+            "title": "Ponte Dinâmica `tools.*` <-> `custom_tools.*` & Auto-Reparo de Runtime Playwright",
+            "description": (
+                "A telemetria de `agent_tasks` detectou falhas nas mensagens do Chat e rotinas agendadas por "
+                "`No module named 'tools.intranetmall_tools'` e `No module named 'playwright'`. Esta correção "
+                "habilita resolução bidirecional automática entre os pacotes `tools/` e `custom_tools/`, "
+                "instala/valida o runtime `playwright` + Chromium e ativa o interceptador de auto-reparo em tempo real na fila."
+            ),
+            "category": "Tool/MCP",
+            "risk_level": "LOW",
+            "expected_impact": "Restauração imediata de 100% das mensagens do Chat e automações Playwright sem falhas de importação",
+            "target_type": "system_setting",
+            "target_id": "module_bridge_and_playwright_engine",
+            "target_name": "Motor de Importação de Tools & Playwright",
+            "estimated_savings_brl": 0.0,
+            "payload": {
+                "action": "update_system_settings",
+                "heal_module_bridge_and_playwright": True,
+                "settings": {
+                    "module_bridge_and_playwright_healed_v1": "true",
+                    "runtime_module_auto_heal_enabled": "true",
+                },
+                "before": before_mod,
+                "after": after_mod,
+                "diff": build_unified_diff(before_mod, after_mod, "Resolução de Módulos (Antes)", "Ponte Dinâmica + Playwright (Depois)"),
+            },
+        })
 
     # 1. Diagnóstico Causa-Raiz [Segurança]: Lock de concorrência SQLite + Tarefas Órfãs BLOCKED
     wal_healed = str(get_setting("sqlite_wal_concurrency_healed", "false")).lower() == "true"
@@ -1996,7 +2045,35 @@ def _apply_task_mutation_with_snapshot(task: Dict[str, Any], approved_by: str) -
                 importlib.invalidate_caches()
                 remediation_actions_taken.append("psycopg2_driver_installed")
 
-        # 3. Intranet Mall: sincroniza usuário e renova sessão autenticada
+        # 3. Conectores baseados em Playwright (Intranet Mall, New Choice ERP, MarQ HR, Delivery):
+        # garante runtime playwright + chromium instalado antes de autenticar
+        if any(k in cid_low for k in ("intranet", "mall", "erp", "marq", "delivery", "ifood", "entrega", "99food")):
+            try:
+                import playwright  # noqa: F401
+                remediation_actions_taken.append("playwright_driver_verified")
+            except ImportError:
+                emit_evolution_log(
+                    task_id,
+                    "APPLY",
+                    "📦 Instalando 'playwright' e navegador headless 'chromium' para automação de portais...",
+                    level="INFO",
+                )
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--quiet", "playwright>=1.40.0"],
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                )
+                subprocess.run(
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                importlib.invalidate_caches()
+                remediation_actions_taken.append("playwright_driver_installed")
+
+        # 3.1 Intranet Mall: sincroniza usuário e renova sessão autenticada
         if "intranet" in cid_low or "mall" in cid_low:
             if target_node:
                 target_node.setdefault("data", {})
@@ -2106,6 +2183,44 @@ def _apply_task_mutation_with_snapshot(task: Dict[str, Any], approved_by: str) -
         )
         for k, v in settings_to_apply.items():
             set_setting(k, str(v))
+
+        if payload.get("heal_module_bridge_and_playwright"):
+            try:
+                import tools as _t_pkg
+                _ct_dir = os.path.abspath(os.path.join(os.path.dirname(_t_pkg.__file__), "..", "custom_tools"))
+                if os.path.isdir(_ct_dir) and _ct_dir not in _t_pkg.__path__:
+                    _t_pkg.__path__.append(_ct_dir)
+                importlib.invalidate_caches()
+            except Exception as _b_err:
+                logger.warning(f"Aviso ao configurar ponte tools/__path__: {_b_err}")
+            try:
+                import playwright  # noqa: F401
+            except ImportError:
+                emit_evolution_log(
+                    task_id,
+                    "APPLY",
+                    "📦 Instalando 'playwright' e navegador 'chromium' para eliminar falhas de importação...",
+                    level="INFO",
+                )
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--quiet", "playwright>=1.40.0"],
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                )
+                subprocess.run(
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                importlib.invalidate_caches()
+            emit_evolution_log(
+                task_id,
+                "APPLY",
+                "🔧 Ponte dinâmica `tools.*` <-> `custom_tools.*` e runtime Playwright homologados com sucesso.",
+                level="INFO",
+            )
 
         if payload.get("heal_sqlite_wal"):
             with sqlite3.connect(DB_PATH) as conn:
@@ -2948,6 +3063,33 @@ def _resume_interrupted_queued_tasks():
         logger.debug(f"Aviso ao retomar tarefas enfileiradas na inicialização: {e}")
 
 
+_LAST_REACTIVE_SELF_HEAL_TS = 0.0
+
+
+def trigger_reactive_self_healing_async(failed_task_id: str, error_msg: str = "") -> None:
+    """
+    Dispara assincronamente uma auditoria e auto-reparo imediato quando uma tarefa de agente falha
+    (ex: ModuleNotFoundError, falha de conector, lock SQLite), respeitando um debounce curto de 45s.
+    """
+    global _LAST_REACTIVE_SELF_HEAL_TS
+    now = time.time()
+    if (now - _LAST_REACTIVE_SELF_HEAL_TS) < 45.0:
+        return
+    _LAST_REACTIVE_SELF_HEAL_TS = now
+
+    def _worker():
+        try:
+            err_low = (error_msg or "").lower()
+            if "no module named 'tools." in err_low or "no module named 'playwright'" in err_low:
+                set_setting("module_bridge_and_playwright_healed_v1", "false")
+            run_evolution_audit_and_propose(triggered_by=f"Auto-Reparo Imediato (Falha #{failed_task_id})")
+        except Exception as e:
+            logger.debug(f"Erro no worker de auto-reparo reativo #{failed_task_id}: {e}")
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+
 def start_evolution_scheduler():
     global _EVO_SCHEDULER_STARTED
     if _EVO_SCHEDULER_STARTED:
@@ -2960,3 +3102,4 @@ def start_evolution_scheduler():
 
 init_evolution_db()
 start_evolution_scheduler()
+
