@@ -448,10 +448,7 @@ def update_evolution_settings(payload: Dict[str, Any], updated_by: str = "Admin"
 
 
 def _find_eligible_auto_tasks(settings: Dict[str, Any]) -> List[str]:
-    """Filtra tarefas `PENDING_APPROVAL` que obedecem às categorias e nível máximo de risco do Full-Auto.
-    Tarefas de diagnóstico e correção de erro (`incident_remediation` ou `requires_human_approval=True`)
-    sempre permanecem em `PENDING_APPROVAL` para aprovação explícita do usuário no Centro de Evolução.
-    """
+    """Filtra tarefas `PENDING_APPROVAL` que obedecem às categorias e nível máximo de risco do Full-Auto."""
     if not settings.get("full_auto_mode"):
         return []
     allowed_cats = set(settings.get("allowed_categories") or [])
@@ -460,17 +457,9 @@ def _find_eligible_auto_tasks(settings: Dict[str, Any]) -> List[str]:
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT id, category, risk_level, target_type, payload_json FROM evolution_tasks WHERE status = 'PENDING_APPROVAL' ORDER BY created_at ASC")
+        cur.execute("SELECT id, category, risk_level FROM evolution_tasks WHERE status = 'PENDING_APPROVAL' ORDER BY created_at ASC")
         eligible = []
         for r in cur.fetchall():
-            if r["target_type"] == "incident_remediation":
-                continue
-            try:
-                p_obj = json.loads(r["payload_json"] or "{}")
-                if p_obj.get("requires_human_approval"):
-                    continue
-            except Exception:
-                pass
             r_score = RISK_ORDER.get(str(r["risk_level"]).upper(), 2)
             if r["category"] in allowed_cats and r_score <= max_risk_score:
                 eligible.append(r["id"])
@@ -1203,7 +1192,7 @@ def analyze_task_error_and_propose_solution(
             emit_evolution_log(
                 evo_id,
                 "DIAGNOSIS",
-                f"🚨 [Análise Automática de Erro] Falha na tarefa #{task_id} diagnosticada. Explicação da causa-raiz e solução enviadas para aprovação no Centro de Evolução.",
+                f"🚨 [Análise Automática de Erro] Falha na tarefa #{task_id} diagnosticada. Explicação da causa-raiz e solução registradas no Centro de Evolução.",
                 level="WARNING",
                 details={"failed_task_id": task_id, "error": str(error_msg)[:200], "proposal_id": evo_id},
             )
@@ -1216,6 +1205,18 @@ def analyze_task_error_and_propose_solution(
                     "task": task_obj,
                 },
             })
+            # Se o Modo Full-Auto estiver ativo e a proposta atender aos filtros de risco e categoria, aprova e executa automaticamente
+            settings = get_evolution_settings()
+            if settings.get("full_auto_mode"):
+                eligible_ids = _find_eligible_auto_tasks(settings)
+                if evo_id in eligible_ids:
+                    emit_evolution_log(
+                        evo_id,
+                        "FULL_AUTO",
+                        f"⚡ [Full-Auto] Proposta {evo_id} ({spec.get('risk_level', 'LOW')} | {spec.get('category')}) aprovada automaticamente para execução imediata.",
+                        level="STEP",
+                    )
+                    trigger_batch_execution_async([evo_id], approved_by="Full-Auto (Auto-Remediação)")
         return evo_id
     except Exception as e:
         logger.warning(f"Erro ao gerar proposta de análise de incidente para tarefa {task_id}: {e}")
@@ -3238,6 +3239,17 @@ def get_evolution_overview() -> Dict[str, Any]:
         for tid in _ACTIVE_TASK_IDS:
             if tid not in active_task_ids:
                 active_task_ids.append(tid)
+
+    if settings.get("full_auto_mode") and running_count == 0 and len(active_task_ids) == 0 and counts.get("PENDING_APPROVAL", 0) > 0:
+        eligible_auto = _find_eligible_auto_tasks(settings)
+        if eligible_auto:
+            emit_evolution_log(
+                "SYSTEM",
+                "FULL_AUTO",
+                f"⚡ Modo Autonomia Total (Full-Auto) ativo: disparando {len(eligible_auto)} proposta(s) elegível(is) automaticamente.",
+                level="STEP",
+            )
+            trigger_batch_execution_async(eligible_auto, approved_by="Full-Auto (Auto-Execução)")
 
     return {
         "settings": settings,
