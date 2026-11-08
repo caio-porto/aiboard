@@ -235,9 +235,16 @@ function translateDomSubtree(rootNode, lang) {
     const parent = textNode.parentElement;
     if (!parent || SKIP_TAGS.has(parent.tagName)) return;
     if (parent.closest && parent.closest('[data-no-i18n="true"]')) {
-      if (textNode.__i18nOrig !== undefined && textNode.nodeValue !== textNode.__i18nOrig) {
+      if (
+        textNode.__i18nOrig !== undefined &&
+        textNode.nodeValue === textNode.__i18nRendered &&
+        textNode.nodeValue !== textNode.__i18nOrig
+      ) {
         textNode.nodeValue = textNode.__i18nOrig;
       }
+      delete textNode.__i18nOrig;
+      delete textNode.__i18nRendered;
+      delete textNode.__i18nLang;
       return;
     }
 

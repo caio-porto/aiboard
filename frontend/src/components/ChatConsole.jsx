@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Send,
   Sparkles,
@@ -31,7 +31,7 @@ import {
 } from '../utils/notifications';
 import { generateConversationTitle } from '../utils/conversationTitle';
 
-export function ChatConsole({ user }) {
+export function ChatConsole({ user, isActive = true }) {
   const { t, tr } = useLanguage();
 
   const defaultWelcomeMessage = {
@@ -100,6 +100,14 @@ export function ChatConsole({ user }) {
   const [notifPermission, setNotifPermission] = useState(() => getNotificationPermission());
   const [showNotifPromptBanner, setShowNotifPromptBanner] = useState(false);
 
+  const isSubmittingRef = useRef(false);
+  const sessionsRef = useRef(sessions);
+  const currentSessionIdRef = useRef(currentSessionId);
+  const messagesContainerRef = useRef(null);
+
+  sessionsRef.current = sessions;
+  currentSessionIdRef.current = currentSessionId;
+
   // Escuta cliques em notificações mobile do Service Worker para focar na sessão correta
   useEffect(() => {
     const handleOpenSession = (e) => {
@@ -163,6 +171,14 @@ export function ChatConsole({ user }) {
     setEditTitleInput('');
   };
 
+  // Auto-scroll suave para a mensagem mais recente sempre que novas mensagens ou estado de carregamento mudarem
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages.length, loading, currentSessionId, isActive]);
+
   // Iniciar nova conversa
   const handleStartNewChat = () => {
     const newSess = createNewSessionObject();
@@ -205,7 +221,11 @@ export function ChatConsole({ user }) {
 
     // 1. Checa se a sessão ativa tem uma pergunta sem resposta e tenta reconectar à tarefa correspondente
     const checkUnresolvedLastMessage = async () => {
-      const activeSess = sessions.find((s) => s.id === currentSessionId);
+      if (isSubmittingRef.current) return;
+
+      const curSessions = sessionsRef.current;
+      const curSessId = currentSessionIdRef.current;
+      const activeSess = curSessions.find((s) => s.id === curSessId);
       if (!activeSess) return;
 
       const msgs = activeSess.messages || [];
@@ -214,20 +234,38 @@ export function ChatConsole({ user }) {
       // Se a última mensagem for do usuário e não houver pendingTaskId
       if (lastMsg && lastMsg.sender === 'user' && !activeSess.pendingTaskId) {
         try {
-          const res = await fetch('/api/tasks?limit=5', {
-            headers: { 'X-User-Email': user?.email || '' }
+          const res = await fetch('/api/tasks?limit=10', {
+            cache: 'no-store',
+            headers: {
+              'X-User-Email': user?.email || '',
+              'Cache-Control': 'no-cache'
+            }
           });
           if (res.ok) {
             const tasksList = await res.json();
             const list = Array.isArray(tasksList) ? tasksList : tasksList.tasks || [];
-            // Encontra a tarefa mais recente que bate com o prompt
+
+            // Tarefas que já foram exibidas em alguma sessão não devem ser reaproveitadas para novas mensagens
+            const alreadyRenderedTaskIds = new Set();
+            curSessions.forEach((s) => {
+              (s.messages || []).forEach((m) => {
+                if (typeof m.id === 'string' && (m.id.startsWith('res-') || m.id.startsWith('err-'))) {
+                  alreadyRenderedTaskIds.add(m.id.slice(4));
+                }
+              });
+            });
+
+            // Encontra a tarefa mais recente que bate com a sessão ou com o prompt e ainda não foi renderizada
             const matchTask = list.find((t) => {
+              const tId = t.task_id || t.id;
+              if (!tId || alreadyRenderedTaskIds.has(tId)) return false;
+              if (t.session_id && t.session_id === curSessId) return true;
               const p = (t.prompt || '').trim();
               const u = lastMsg.text.trim();
               return p === u || p.startsWith(u.slice(0, 30)) || u.startsWith(p.slice(0, 30));
             });
 
-            if (matchTask && !isCancelled) {
+            if (matchTask && !isCancelled && !isSubmittingRef.current) {
               const tId = matchTask.task_id || matchTask.id;
               if (matchTask.status === 'COMPLETED') {
                 const respTime = matchTask.completed_at
@@ -245,32 +283,56 @@ export function ChatConsole({ user }) {
                 }
 
                 setSessions((prev) =>
-                  prev.map((s) =>
-                    s.id === currentSessionId
-                      ? {
-                          ...s,
-                          title: resolvedTitle,
-                          pendingTaskId: null,
-                          pendingTaskStatus: null,
-                          updatedAt: new Date().toISOString(),
-                          messages: [...s.messages, completedMsg]
-                        }
-                      : s
-                  )
+                  prev.map((s) => {
+                    if (s.id !== curSessId) return s;
+                    const alreadyHas = (s.messages || []).some((m) => m.id === `res-${tId}`);
+                    return {
+                      ...s,
+                      title: resolvedTitle,
+                      pendingTaskId: null,
+                      pendingTaskStatus: null,
+                      updatedAt: new Date().toISOString(),
+                      messages: alreadyHas ? s.messages : [...(s.messages || []), completedMsg]
+                    };
+                  })
                 );
                 notifyAgentResponse({
                   title: `${resolvedTitle && resolvedTitle !== 'Nova Conversa' ? resolvedTitle : 'AI Board'} • ${t('chat.agentResponded')}`,
                   body: completedMsg.text,
-                  sessionId: currentSessionId,
+                  sessionId: curSessId,
                   taskId: tId
                 });
+                setLoading(false);
+                setActiveTask(null);
+                return;
+              } else if (matchTask.status === 'FAILED') {
+                const failMsg = {
+                  id: `err-${tId}`,
+                  sender: 'agent',
+                  isError: true,
+                  text: `❌ ${t('chat.taskFailed', { error: matchTask.error || 'Unknown error' })}`,
+                  time: t('chat.now')
+                };
+                setSessions((prev) =>
+                  prev.map((s) => {
+                    if (s.id !== curSessId) return s;
+                    const alreadyHas = (s.messages || []).some((m) => m.id === `err-${tId}`);
+                    return {
+                      ...s,
+                      pendingTaskId: null,
+                      pendingTaskStatus: null,
+                      updatedAt: new Date().toISOString(),
+                      messages: alreadyHas ? s.messages : [...(s.messages || []), failMsg]
+                    };
+                  })
+                );
                 setLoading(false);
                 setActiveTask(null);
                 return;
               } else if (matchTask.status === 'RUNNING' || matchTask.status === 'QUEUED') {
                 setSessions((prev) =>
                   prev.map((s) =>
-                    s.id === currentSessionId
+                    s.id === curSessId
                       ? {
                           ...s,
                           pendingTaskId: tId,
@@ -290,15 +352,23 @@ export function ChatConsole({ user }) {
       }
     };
 
-    checkUnresolvedLastMessage();
-
-    // 2. Loop de Polling para qualquer sessão com pendingTaskId
+    // 2. Loop de Polling para qualquer sessão com pendingTaskId (ou pergunta pendente sem taskId)
     const pollPending = async () => {
-      const activeSess = sessions.find((s) => s.id === currentSessionId);
+      if (isSubmittingRef.current) return;
+
+      const curSessions = sessionsRef.current;
+      const curSessId = currentSessionIdRef.current;
+      const activeSess = curSessions.find((s) => s.id === curSessId);
       const pendingTask = activeSess?.pendingTaskId;
 
       if (!pendingTask) {
-        if (loading && !sessions.some((s) => s.id === currentSessionId && s.pendingTaskId)) {
+        const msgs = activeSess?.messages || [];
+        const lastMsg = msgs[msgs.length - 1];
+        if (lastMsg && lastMsg.sender === 'user') {
+          await checkUnresolvedLastMessage();
+          return;
+        }
+        if (!curSessions.some((s) => s.id === curSessId && s.pendingTaskId)) {
           setLoading(false);
           setActiveTask(null);
         }
@@ -309,7 +379,10 @@ export function ChatConsole({ user }) {
       setActiveTask((prev) => prev || { id: pendingTask, status: activeSess.pendingTaskStatus || 'RUNNING' });
 
       try {
-        const res = await fetch(`/api/tasks/${pendingTask}`);
+        const res = await fetch(`/api/tasks/${pendingTask}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' }
+        });
         if (!res.ok) return;
         const taskData = await res.json();
         if (isCancelled) return;
@@ -399,15 +472,27 @@ export function ChatConsole({ user }) {
     pollPending();
     const interval = setInterval(pollPending, 1500);
 
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        pollPending();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
     return () => {
       isCancelled = true;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
     };
-  }, [sessions, currentSessionId, user?.email]);
+  }, [sessions, currentSessionId, user?.email, isActive]);
 
   const handleSend = async (customPrompt) => {
     const textToSend = customPrompt || prompt;
-    if (!textToSend.trim() || loading) return;
+    if (!textToSend.trim() || loading || isSubmittingRef.current) return;
+
+    isSubmittingRef.current = true;
 
     const userMsgId = `user-${Date.now()}`;
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -513,6 +598,8 @@ export function ChatConsole({ user }) {
             : s
         )
       );
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
@@ -755,7 +842,10 @@ export function ChatConsole({ user }) {
         </div>
 
         {/* Área de Mensagens com scroll interno independente */}
-        <div className="flex-1 min-h-0 bg-white border border-[#E2E8E4] rounded-3xl p-4 md:p-5 overflow-y-auto space-y-4 shadow-sm">
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 min-h-0 bg-white border border-[#E2E8E4] rounded-3xl p-4 md:p-5 overflow-y-auto space-y-4 shadow-sm"
+        >
           {messages.map((m) => {
             const isUser = m.sender === 'user';
             const displayMsgText = m.id === 'welcome' ? t('chat.welcome') : m.text;

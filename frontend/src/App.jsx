@@ -403,7 +403,7 @@ function AppContent({ user, setUser, companyConfig }) {
       {/* Active Tab Content */}
       <main className="flex-1 min-h-0 overflow-hidden relative">
         <div className={`h-full w-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
-          <ChatConsole user={user} />
+          <ChatConsole user={user} isActive={activeTab === 'chat'} />
         </div>
         {activeTab === 'studio' && <VisualStudio user={user} />}
         {activeTab === 'history' && <HistoryView user={user} />}
