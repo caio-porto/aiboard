@@ -19,7 +19,8 @@ import {
   Bell,
   BellRing,
   BellOff,
-  Smartphone
+  Smartphone,
+  Edit2
 } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { useLanguage } from '../i18n';
@@ -28,6 +29,7 @@ import {
   getNotificationPermission,
   requestNotificationPermission
 } from '../utils/notifications';
+import { generateConversationTitle } from '../utils/conversationTitle';
 
 export function ChatConsole({ user }) {
   const { t, tr } = useLanguage();
@@ -50,22 +52,33 @@ export function ChatConsole({ user }) {
     messages: [defaultWelcomeMessage]
   });
 
-  // Inicializa sessões do localStorage (atualizando automaticamente mensagens de boas-vindas legadas)
+  // Inicializa sessões do localStorage (atualizando automaticamente mensagens de boas-vindas e títulos temáticos)
   const [sessions, setSessions] = useState(() => {
     try {
       const saved = localStorage.getItem(getStorageKey());
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((s) => ({
-            ...s,
-            messages: (s.messages || []).map((m) => {
+          return parsed.map((s) => {
+            const msgs = (s.messages || []).map((m) => {
               if (m.id === 'welcome') {
                 return { ...m, text: defaultWelcomeMessage.text };
               }
               return m;
-            })
-          }));
+            });
+            // Auto-atualiza títulos genéricos legados com base na pergunta do usuário
+            let title = s.title;
+            const firstUserMsg = msgs.find((m) => m.sender === 'user');
+            if (firstUserMsg && (!title || title === 'Nova Conversa' || title === 'New Conversation' || title === 'Nueva Conversación')) {
+              const firstAgentMsg = msgs.find((m) => m.sender === 'agent' && m.id !== 'welcome');
+              title = generateConversationTitle(firstUserMsg.text, firstAgentMsg?.text);
+            }
+            return {
+              ...s,
+              title: title || t('chat.newConversation'),
+              messages: msgs
+            };
+          });
         }
       }
     } catch (e) {
@@ -118,6 +131,37 @@ export function ChatConsole({ user }) {
   // Obtém a sessão ativa atual
   const activeSession = sessions.find((s) => s.id === currentSessionId) || sessions[0] || createNewSessionObject();
   const messages = activeSession.messages || [defaultWelcomeMessage];
+
+  // Suporte a renomear conversa manualmente
+  const [editingSessionId, setEditingSessionId] = useState(null);
+  const [editTitleInput, setEditTitleInput] = useState('');
+
+  const handleStartRename = (e, sessId, currentTitle) => {
+    e?.stopPropagation();
+    setEditingSessionId(sessId);
+    setEditTitleInput(currentTitle === 'Nova Conversa' ? '' : currentTitle);
+  };
+
+  const handleSaveRename = (e, sessId) => {
+    e?.stopPropagation();
+    e?.preventDefault();
+    const clean = editTitleInput.trim();
+    if (clean) {
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessId ? { ...s, title: clean, updatedAt: new Date().toISOString() } : s
+        )
+      );
+    }
+    setEditingSessionId(null);
+    setEditTitleInput('');
+  };
+
+  const handleCancelRename = (e) => {
+    e?.stopPropagation();
+    setEditingSessionId(null);
+    setEditTitleInput('');
+  };
 
   // Iniciar nova conversa
   const handleStartNewChat = () => {
@@ -195,11 +239,17 @@ export function ChatConsole({ user }) {
                   text: matchTask.result || t('chat.opCompleted'),
                   time: respTime
                 };
+                let resolvedTitle = activeSess.title;
+                if (!resolvedTitle || resolvedTitle === 'Nova Conversa' || resolvedTitle === 'New Conversation' || resolvedTitle === 'Nueva Conversación') {
+                  resolvedTitle = generateConversationTitle(lastMsg.text, matchTask.result);
+                }
+
                 setSessions((prev) =>
                   prev.map((s) =>
                     s.id === currentSessionId
                       ? {
                           ...s,
+                          title: resolvedTitle,
                           pendingTaskId: null,
                           pendingTaskStatus: null,
                           updatedAt: new Date().toISOString(),
@@ -209,7 +259,7 @@ export function ChatConsole({ user }) {
                   )
                 );
                 notifyAgentResponse({
-                  title: `${activeSess.title && activeSess.title !== 'Nova Conversa' ? activeSess.title : 'AI Board'} • ${t('chat.agentResponded')}`,
+                  title: `${resolvedTitle && resolvedTitle !== 'Nova Conversa' ? resolvedTitle : 'AI Board'} • ${t('chat.agentResponded')}`,
                   body: completedMsg.text,
                   sessionId: currentSessionId,
                   taskId: tId
@@ -282,9 +332,15 @@ export function ChatConsole({ user }) {
             prev.map((s) => {
               if (s.id !== activeSess.id) return s;
               const alreadyHas = (s.messages || []).some((m) => m.id === `res-${pendingTask}`);
+              let resolvedTitle = s.title;
+              const firstUserMsg = (s.messages || []).find((m) => m.sender === 'user');
+              if (firstUserMsg && (!resolvedTitle || resolvedTitle === 'Nova Conversa' || resolvedTitle === 'New Conversation' || resolvedTitle === 'Nueva Conversación')) {
+                resolvedTitle = generateConversationTitle(firstUserMsg.text, taskData.result);
+              }
+
               if (!alreadyHas) {
                 notifyAgentResponse({
-                  title: `${activeSess.title && activeSess.title !== 'Nova Conversa' ? activeSess.title : 'AI Board'} • ${t('chat.agentResponded')}`,
+                  title: `${resolvedTitle && resolvedTitle !== 'Nova Conversa' ? resolvedTitle : 'AI Board'} • ${t('chat.agentResponded')}`,
                   body: completedMsg.text,
                   sessionId: activeSess.id,
                   taskId: pendingTask
@@ -292,6 +348,7 @@ export function ChatConsole({ user }) {
               }
               return {
                 ...s,
+                title: resolvedTitle,
                 pendingTaskId: null,
                 pendingTaskStatus: null,
                 updatedAt: new Date().toISOString(),
@@ -361,11 +418,19 @@ export function ChatConsole({ user }) {
       { id: userMsgId, sender: 'user', text: textToSend, time: nowTime }
     ];
 
-    // Atualiza título da sessão caso seja a primeira pergunta do usuário
-    const isFirstUserMessage = messages.filter((m) => m.sender === 'user').length === 0;
-    const sessionTitle = isFirstUserMessage
-      ? (textToSend.length > 36 ? textToSend.slice(0, 36) + '...' : textToSend)
-      : activeSession.title;
+    // Atualiza título da sessão caso seja a primeira pergunta ou o título ainda seja genérico
+    const userMsgs = messages.filter((m) => m.sender === 'user');
+    const isFirstUserMessage = userMsgs.length === 0;
+    const isGenericTitle =
+      !activeSession.title ||
+      activeSession.title === 'Nova Conversa' ||
+      activeSession.title === 'New Conversation' ||
+      activeSession.title === 'Nueva Conversación';
+
+    const sessionTitle =
+      isFirstUserMessage || isGenericTitle
+        ? generateConversationTitle(textToSend, null)
+        : activeSession.title;
 
     setSessions((prev) =>
       prev.map((s) =>
@@ -506,26 +571,63 @@ export function ChatConsole({ user }) {
                 }`}
               >
                 <div className="min-w-0 flex-1 pr-1.5">
-                  <div
-                    className="text-xs truncate font-semibold leading-tight"
-                    data-no-i18n={sess.title && sess.title !== 'Nova Conversa' ? 'true' : undefined}
-                  >
-                    {sess.title === 'Nova Conversa' ? t('chat.newConversation') : (sess.title || t('chat.untitledConversation'))}
-                  </div>
-                  <div className="text-[10px] text-[#5A6B61] flex items-center gap-1.5 mt-0.5 truncate">
-                    <span>{userMsgCount} {userMsgCount === 1 ? t('chat.question') : t('chat.questions')}</span>
-                    {updatedDate && <span>• {updatedDate}</span>}
-                  </div>
+                  {editingSessionId === sess.id ? (
+                    <form
+                      onSubmit={(e) => handleSaveRename(e, sess.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1 my-0.5"
+                    >
+                      <input
+                        type="text"
+                        autoFocus
+                        value={editTitleInput}
+                        onChange={(e) => setEditTitleInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') handleCancelRename(e);
+                        }}
+                        className="w-full text-xs font-semibold px-2 py-1 rounded-lg border border-[#16422B] bg-white text-[#16422B] focus:outline-none"
+                      />
+                      <button
+                        type="submit"
+                        className="p-1 rounded bg-[#16422B] text-white hover:bg-[#2B6143] shrink-0"
+                      >
+                        <Check className="w-3 h-3" />
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <div
+                        className="text-xs truncate font-semibold leading-tight"
+                        data-no-i18n={sess.title && sess.title !== 'Nova Conversa' ? 'true' : undefined}
+                      >
+                        {sess.title === 'Nova Conversa' ? t('chat.newConversation') : (sess.title || t('chat.untitledConversation'))}
+                      </div>
+                      <div className="text-[10px] text-[#5A6B61] flex items-center gap-1.5 mt-0.5 truncate">
+                        <span>{userMsgCount} {userMsgCount === 1 ? t('chat.question') : t('chat.questions')}</span>
+                        {updatedDate && <span>• {updatedDate}</span>}
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={(e) => handleDeleteSession(e, sess.id)}
-                  title={t('chat.deleteConversation')}
-                  className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition shrink-0 cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition">
+                  <button
+                    type="button"
+                    onClick={(e) => handleStartRename(e, sess.id, sess.title)}
+                    title={t('chat.renameChat')}
+                    className="p-1 rounded-lg text-gray-400 hover:text-[#16422B] hover:bg-gray-100 transition cursor-pointer"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => handleDeleteSession(e, sess.id)}
+                    title={t('chat.deleteConversation')}
+                    className="p-1 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -557,12 +659,48 @@ export function ChatConsole({ user }) {
               <History className="w-4 h-4" />
             </button>
             <div className="min-w-0">
-              <h2
-                className="font-extrabold text-xs md:text-sm text-[#16422B] truncate leading-tight"
-                data-no-i18n={activeSession.title && activeSession.title !== 'Nova Conversa' ? 'true' : undefined}
-              >
-                {activeSession.title === 'Nova Conversa' ? t('chat.newConversation') : (activeSession.title || t('chat.operationalIntelligenceCenter'))}
-              </h2>
+              {editingSessionId === activeSession.id ? (
+                <form
+                  onSubmit={(e) => handleSaveRename(e, activeSession.id)}
+                  className="flex items-center gap-1.5"
+                >
+                  <input
+                    type="text"
+                    autoFocus
+                    value={editTitleInput}
+                    onChange={(e) => setEditTitleInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') handleCancelRename(e);
+                    }}
+                    className="text-xs md:text-sm font-extrabold px-2 py-0.5 rounded-lg border border-[#16422B] bg-white text-[#16422B] focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="p-1 rounded-lg bg-[#16422B] text-white hover:bg-[#2B6143] shrink-0"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                </form>
+              ) : (
+                <div className="flex items-center gap-1.5 group/header">
+                  <h2
+                    className="font-extrabold text-xs md:text-sm text-[#16422B] truncate leading-tight cursor-pointer"
+                    onClick={(e) => handleStartRename(e, activeSession.id, activeSession.title)}
+                    title={t('chat.renameChat')}
+                    data-no-i18n={activeSession.title && activeSession.title !== 'Nova Conversa' ? 'true' : undefined}
+                  >
+                    {activeSession.title === 'Nova Conversa' ? t('chat.newConversation') : (activeSession.title || t('chat.operationalIntelligenceCenter'))}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={(e) => handleStartRename(e, activeSession.id, activeSession.title)}
+                    title={t('chat.renameChat')}
+                    className="opacity-0 group-hover/header:opacity-100 p-0.5 text-gray-400 hover:text-[#16422B] transition cursor-pointer"
+                  >
+                    <Edit2 className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
               <span className="text-[10px] text-[#5A6B61] font-semibold flex items-center gap-1 truncate">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
                 <span className="truncate">{t('chat.specialistTeamConnected')}</span>
