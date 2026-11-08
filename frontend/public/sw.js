@@ -1,5 +1,5 @@
 /* AI Board • PWA & Push Notification Service Worker */
-const CACHE_NAME = 'aiboard-pwa-v1';
+const CACHE_NAME = 'aiboard-pwa-v2';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',

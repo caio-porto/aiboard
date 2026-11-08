@@ -2125,6 +2125,195 @@ def get_recent_tasks(
     # Admin: se user_email foi passado, filtra por ele; senão retorna todas
     return list_tasks(limit=limit, user_email=user_email, is_admin=True)
 
+
+def _reconcile_sessions_with_user_tasks(sessions: List[Dict[str, Any]], user_email: str) -> List[Dict[str, Any]]:
+    """
+    Sincroniza as sessões de chat com o banco `agent_tasks` do usuário:
+    1. Se uma sessão tiver uma pergunta cuja resposta anterior falhou (`isError: True` / `❌`),
+       mas existir uma tarefa `COMPLETED` para a mesma pergunta, substitui o erro pela resposta concluída.
+    2. Se existirem tarefas `COMPLETED` do Chat Web para o usuário que ainda não estejam nas sessões
+       deste dispositivo (ex: pergunta feita no PC e aberta no Celular), adiciona/sincroniza automaticamente.
+    """
+    if not user_email:
+        return sessions or []
+
+    try:
+        user_tasks = list_tasks(limit=30, user_email=user_email, is_admin=True)
+    except Exception:
+        user_tasks = []
+
+    web_completed = [
+        t for t in (user_tasks or [])
+        if t.get("status") == "COMPLETED"
+        and t.get("result")
+        and any(k in str(t.get("requester") or "").lower() for k in ("web", "react_console"))
+        and str(t.get("user_email") or "").lower() == user_email.lower()
+    ]
+    if not web_completed:
+        return sessions or []
+
+    from datetime import datetime
+    reconciled = json.loads(json.dumps(sessions or []))
+    rendered_task_ids = set()
+
+    for s in reconciled:
+        msgs = s.get("messages") or []
+        for idx, m in enumerate(msgs):
+            mid = str(m.get("id") or "")
+            if mid.startswith("res-"):
+                rendered_task_ids.add(mid[4:])
+            # Verifica se é uma mensagem de usuário seguida por erro ou sem resposta
+            if m.get("sender") == "user":
+                u_text = str(m.get("text") or "").strip()
+                if not u_text:
+                    continue
+                next_msg = msgs[idx + 1] if idx + 1 < len(msgs) else None
+                next_is_error = bool(
+                    next_msg
+                    and next_msg.get("sender") == "agent"
+                    and (next_msg.get("isError") or str(next_msg.get("text") or "").strip().startswith("❌"))
+                )
+                if next_msg is None or next_is_error:
+                    match = next(
+                        (
+                            t for t in web_completed
+                            if str(t.get("prompt") or "").strip() == u_text
+                            or str(t.get("prompt") or "").strip().startswith(u_text[:30])
+                            or u_text.startswith(str(t.get("prompt") or "").strip()[:30])
+                        ),
+                        None,
+                    )
+                    if match:
+                        tid = match.get("task_id") or match.get("id")
+                        comp_ts = float(match.get("completed_at") or match.get("created_at") or time.time())
+                        time_str = datetime.fromtimestamp(comp_ts).strftime("%H:%M")
+                        iso_str = datetime.fromtimestamp(comp_ts).isoformat()
+                        new_agent_msg = {
+                            "id": f"res-{tid}",
+                            "sender": "agent",
+                            "isError": False,
+                            "text": match.get("result"),
+                            "time": time_str,
+                        }
+                        if next_is_error:
+                            msgs[idx + 1] = new_agent_msg
+                        else:
+                            msgs.insert(idx + 1, new_agent_msg)
+                        s["pendingTaskId"] = None
+                        s["pendingTaskStatus"] = None
+                        s["updatedAt"] = iso_str
+                        rendered_task_ids.add(str(tid))
+
+    # Se a tarefa mais recente concluída no servidor ainda não estiver em nenhuma sessão, cria/insere no topo
+    for t in reversed(web_completed[:10]):
+        tid = str(t.get("task_id") or t.get("id") or "")
+        if not tid or tid in rendered_task_ids:
+            continue
+        u_prompt = str(t.get("prompt") or "").strip()
+        # Evita duplicar se já houver sessão com a mesma resposta exata
+        already_in_any = any(
+            any(
+                m.get("sender") == "agent"
+                and not m.get("isError")
+                and str(m.get("text") or "").strip() == str(t.get("result") or "").strip()
+                for m in (s.get("messages") or [])
+            )
+            for s in reconciled
+        )
+        if already_in_any:
+            rendered_task_ids.add(tid)
+            continue
+
+        comp_ts = float(t.get("completed_at") or t.get("created_at") or time.time())
+        creat_ts = float(t.get("created_at") or comp_ts)
+        u_time = datetime.fromtimestamp(creat_ts).strftime("%H:%M")
+        a_time = datetime.fromtimestamp(comp_ts).strftime("%H:%M")
+        iso_creat = datetime.fromtimestamp(creat_ts).isoformat()
+        iso_comp = datetime.fromtimestamp(comp_ts).isoformat()
+
+        new_sess = {
+            "id": f"sess-sync-{tid}",
+            "title": u_prompt[:36] + ("..." if len(u_prompt) > 36 else ""),
+            "createdAt": iso_creat,
+            "updatedAt": iso_comp,
+            "pendingTaskId": None,
+            "pendingTaskStatus": None,
+            "messages": [
+                {
+                    "id": "welcome",
+                    "sender": "agent",
+                    "text": "Olá! Sou a Inteligência Central da sua operação. Posso acionar toda a nossa árvore de agentes especialistas e ferramentas para responder perguntas estratégicas, auditar números ou executar tarefas. Como posso ajudar agora?",
+                    "time": u_time,
+                },
+                {
+                    "id": f"user-{tid}",
+                    "sender": "user",
+                    "text": u_prompt,
+                    "time": u_time,
+                },
+                {
+                    "id": f"res-{tid}",
+                    "sender": "agent",
+                    "isError": False,
+                    "text": t.get("result"),
+                    "time": a_time,
+                },
+            ],
+        }
+        reconciled.insert(0, new_sess)
+        rendered_task_ids.add(tid)
+
+    # Remove sessões vazias duplicadas se já houver sessões com conteúdo
+    non_empty = [
+        s for s in reconciled
+        if any(m.get("sender") == "user" for m in (s.get("messages") or []))
+    ]
+    if non_empty:
+        reconciled = non_empty
+
+    reconciled.sort(key=lambda s: str(s.get("updatedAt") or ""), reverse=True)
+    return reconciled[:30]
+
+
+@app.get("/api/chat/sessions")
+def get_user_chat_sessions(
+    user_email: Optional[str] = None,
+    x_user_email: Optional[str] = Header(None),
+):
+    target_email = (x_user_email or user_email or "").strip().lower()
+    if not target_email:
+        return {"sessions": []}
+    raw = get_setting(f"chat_sessions_v3_{target_email}", "[]")
+    try:
+        saved = json.loads(raw) if raw else []
+        if not isinstance(saved, list):
+            saved = []
+    except Exception:
+        saved = []
+    reconciled = _reconcile_sessions_with_user_tasks(saved, target_email)
+    try:
+        set_setting(f"chat_sessions_v3_{target_email}", json.dumps(reconciled, ensure_ascii=False))
+    except Exception:
+        pass
+    return {"sessions": reconciled}
+
+
+@app.post("/api/chat/sessions")
+def save_user_chat_sessions(
+    payload: Dict[str, Any] = Body(...),
+    x_user_email: Optional[str] = Header(None),
+):
+    target_email = (x_user_email or payload.get("user_email") or "").strip().lower()
+    if not target_email:
+        return {"ok": False}
+    incoming = payload.get("sessions")
+    if not isinstance(incoming, list):
+        return {"ok": False}
+    reconciled = _reconcile_sessions_with_user_tasks(incoming, target_email)
+    set_setting(f"chat_sessions_v3_{target_email}", json.dumps(reconciled, ensure_ascii=False))
+    return {"ok": True, "sessions": reconciled}
+
+
 # --- TOOL HEALTH DIAGNOSTICS & VERIFICATION ---
 @app.get("/api/tools/cache")
 def get_tools_cached_status():

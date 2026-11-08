@@ -127,6 +127,18 @@ export function ChatConsole({ user, isActive = true }) {
     setShowNotifPromptBanner(false);
   };
 
+  const formatTaskTime = (rawTs) => {
+    if (!rawTs) return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const num = Number(rawTs);
+    const d = !Number.isNaN(num)
+      ? new Date(num < 1e12 ? num * 1000 : num)
+      : new Date(rawTs);
+    if (Number.isNaN(d.getTime())) {
+      return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
   // Salva sessões no localStorage sempre que forem alteradas
   useEffect(() => {
     try {
@@ -135,6 +147,100 @@ export function ChatConsole({ user, isActive = true }) {
       console.error('Erro ao salvar sessões no localStorage:', e);
     }
   }, [sessions, user?.email]);
+
+  // Sincroniza sessões entre dispositivos (Desktop <-> Mobile PWA) e substitui erros antigos por respostas concluídas mais recentes
+  useEffect(() => {
+    if (!user?.email) return;
+    let cancelled = false;
+
+    const reconcileWithServer = async () => {
+      if (isSubmittingRef.current) return;
+      try {
+        // 1. Busca sessões salvas no servidor + reconciliação automática com agent_tasks
+        const getRes = await fetch(`/api/chat/sessions?user_email=${encodeURIComponent(user.email)}`, {
+          cache: 'no-store',
+          headers: {
+            'X-User-Email': user.email,
+            'Cache-Control': 'no-cache'
+          }
+        });
+        let serverSessions = [];
+        if (getRes.ok) {
+          const getData = await getRes.json();
+          if (Array.isArray(getData?.sessions)) {
+            serverSessions = getData.sessions;
+          }
+        }
+
+        // Mescla sessões locais com as do servidor preservando as mais recentes
+        const mergedMap = new Map();
+        (sessionsRef.current || []).forEach((s) => {
+          if (s?.id) mergedMap.set(s.id, s);
+        });
+        serverSessions.forEach((srv) => {
+          if (!srv?.id) return;
+          const loc = mergedMap.get(srv.id);
+          if (!loc) {
+            mergedMap.set(srv.id, srv);
+          } else {
+            const locHasErr = (loc.messages || []).some((m) => m.isError || String(m.text || '').startsWith('❌'));
+            const srvHasErr = (srv.messages || []).some((m) => m.isError || String(m.text || '').startsWith('❌'));
+            if (locHasErr && !srvHasErr) {
+              mergedMap.set(srv.id, srv);
+            } else if ((srv.messages || []).length > (loc.messages || []).length) {
+              mergedMap.set(srv.id, srv);
+            }
+          }
+        });
+
+        const mergedList = Array.from(mergedMap.values());
+
+        // 2. Envia a lista mesclada para reconciliação com agent_tasks no servidor
+        const postRes = await fetch('/api/chat/sessions', {
+          method: 'POST',
+          cache: 'no-store',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Email': user.email,
+            'Cache-Control': 'no-cache'
+          },
+          body: JSON.stringify({
+            user_email: user.email,
+            sessions: mergedList
+          })
+        });
+
+        if (postRes.ok && !cancelled && !isSubmittingRef.current) {
+          const postData = await postRes.json();
+          const reconciled = (Array.isArray(postData?.sessions) ? postData.sessions : []).map((s) => {
+            const msgs = s.messages || [];
+            let title = s.title;
+            const firstUserMsg = msgs.find((m) => m.sender === 'user');
+            if (firstUserMsg && (!title || title === 'Nova Conversa' || title === 'New Conversation' || title === 'Nueva Conversación')) {
+              const firstAgentMsg = msgs.find((m) => m.sender === 'agent' && m.id !== 'welcome');
+              title = generateConversationTitle(firstUserMsg.text, firstAgentMsg?.text);
+            }
+            return { ...s, title: title || t('chat.newConversation') };
+          });
+
+          if (reconciled.length > 0) {
+            const curJson = JSON.stringify(sessionsRef.current);
+            const nextJson = JSON.stringify(reconciled);
+            if (curJson !== nextJson) {
+              setSessions(reconciled);
+              if (!reconciled.some((s) => s.id === currentSessionIdRef.current)) {
+                setCurrentSessionId(reconciled[0].id);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao sincronizar sessões com o servidor:', err);
+      }
+    };
+
+    reconcileWithServer();
+  }, [user?.email, isActive]);
 
   // Obtém a sessão ativa atual
   const activeSession = sessions.find((s) => s.id === currentSessionId) || sessions[0] || createNewSessionObject();
@@ -219,7 +325,7 @@ export function ChatConsole({ user, isActive = true }) {
   useEffect(() => {
     let isCancelled = false;
 
-    // 1. Checa se a sessão ativa tem uma pergunta sem resposta e tenta reconectar à tarefa correspondente
+    // 1. Checa se a sessão ativa tem uma pergunta sem resposta (ou com erro anterior já superado por tarefa COMPLETED)
     const checkUnresolvedLastMessage = async () => {
       if (isSubmittingRef.current) return;
 
@@ -230,11 +336,23 @@ export function ChatConsole({ user, isActive = true }) {
 
       const msgs = activeSess.messages || [];
       const lastMsg = msgs[msgs.length - 1];
+      const lastIsError = Boolean(
+        lastMsg &&
+        lastMsg.sender === 'agent' &&
+        (lastMsg.isError || String(lastMsg.text || '').trim().startsWith('❌'))
+      );
+      const targetUserMsg =
+        lastMsg?.sender === 'user'
+          ? lastMsg
+          : lastIsError
+          ? [...msgs].reverse().find((m) => m.sender === 'user')
+          : null;
 
-      // Se a última mensagem for do usuário e não houver pendingTaskId
-      if (lastMsg && lastMsg.sender === 'user' && !activeSess.pendingTaskId) {
+      // Se a última mensagem for do usuário (ou erro anterior) e não houver pendingTaskId
+      if (targetUserMsg && !activeSess.pendingTaskId) {
         try {
-          const res = await fetch('/api/tasks?limit=10', {
+          const emailParam = user?.email ? `&user_email=${encodeURIComponent(user.email)}` : '';
+          const res = await fetch(`/api/tasks?limit=15${emailParam}`, {
             cache: 'no-store',
             headers: {
               'X-User-Email': user?.email || '',
@@ -245,23 +363,24 @@ export function ChatConsole({ user, isActive = true }) {
             const tasksList = await res.json();
             const list = Array.isArray(tasksList) ? tasksList : tasksList.tasks || [];
 
-            // Tarefas que já foram exibidas em alguma sessão não devem ser reaproveitadas para novas mensagens
+            // Tarefas que já foram exibidas com sucesso em alguma sessão não devem ser reaproveitadas para novas mensagens
             const alreadyRenderedTaskIds = new Set();
             curSessions.forEach((s) => {
               (s.messages || []).forEach((m) => {
-                if (typeof m.id === 'string' && (m.id.startsWith('res-') || m.id.startsWith('err-'))) {
+                if (typeof m.id === 'string' && m.id.startsWith('res-')) {
                   alreadyRenderedTaskIds.add(m.id.slice(4));
                 }
               });
             });
 
-            // Encontra a tarefa mais recente que bate com a sessão ou com o prompt e ainda não foi renderizada
+            // Encontra a tarefa mais recente que bate com a sessão ou com o prompt
             const matchTask = list.find((t) => {
               const tId = t.task_id || t.id;
               if (!tId || alreadyRenderedTaskIds.has(tId)) return false;
+              if (lastIsError && t.status !== 'COMPLETED') return false;
               if (t.session_id && t.session_id === curSessId) return true;
               const p = (t.prompt || '').trim();
-              const u = lastMsg.text.trim();
+              const u = targetUserMsg.text.trim();
               return p === u || p.startsWith(u.slice(0, 30)) || u.startsWith(p.slice(0, 30));
             });
 
@@ -269,30 +388,36 @@ export function ChatConsole({ user, isActive = true }) {
               const tId = matchTask.task_id || matchTask.id;
               if (matchTask.status === 'COMPLETED') {
                 const respTime = matchTask.completed_at
-                  ? new Date(matchTask.completed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  ? formatTaskTime(matchTask.completed_at)
                   : t('chat.now');
                 const completedMsg = {
                   id: `res-${tId}`,
                   sender: 'agent',
+                  isError: false,
                   text: matchTask.result || t('chat.opCompleted'),
                   time: respTime
                 };
                 let resolvedTitle = activeSess.title;
                 if (!resolvedTitle || resolvedTitle === 'Nova Conversa' || resolvedTitle === 'New Conversation' || resolvedTitle === 'Nueva Conversación') {
-                  resolvedTitle = generateConversationTitle(lastMsg.text, matchTask.result);
+                  resolvedTitle = generateConversationTitle(targetUserMsg.text, matchTask.result);
                 }
 
                 setSessions((prev) =>
                   prev.map((s) => {
                     if (s.id !== curSessId) return s;
-                    const alreadyHas = (s.messages || []).some((m) => m.id === `res-${tId}`);
+                    const sMsgs = s.messages || [];
+                    const alreadyHas = sMsgs.some((m) => m.id === `res-${tId}`);
+                    if (alreadyHas) return s;
+                    const updatedMsgs = lastIsError
+                      ? [...sMsgs.slice(0, -1), completedMsg]
+                      : [...sMsgs, completedMsg];
                     return {
                       ...s,
                       title: resolvedTitle,
                       pendingTaskId: null,
                       pendingTaskStatus: null,
                       updatedAt: new Date().toISOString(),
-                      messages: alreadyHas ? s.messages : [...(s.messages || []), completedMsg]
+                      messages: updatedMsgs
                     };
                   })
                 );
@@ -305,7 +430,7 @@ export function ChatConsole({ user, isActive = true }) {
                 setLoading(false);
                 setActiveTask(null);
                 return;
-              } else if (matchTask.status === 'FAILED') {
+              } else if (matchTask.status === 'FAILED' && !lastIsError) {
                 const failMsg = {
                   id: `err-${tId}`,
                   sender: 'agent',
@@ -352,7 +477,7 @@ export function ChatConsole({ user, isActive = true }) {
       }
     };
 
-    // 2. Loop de Polling para qualquer sessão com pendingTaskId (ou pergunta pendente sem taskId)
+    // 2. Loop de Polling para qualquer sessão com pendingTaskId (ou pergunta pendente / erro substituível)
     const pollPending = async () => {
       if (isSubmittingRef.current) return;
 
@@ -364,7 +489,12 @@ export function ChatConsole({ user, isActive = true }) {
       if (!pendingTask) {
         const msgs = activeSess?.messages || [];
         const lastMsg = msgs[msgs.length - 1];
-        if (lastMsg && lastMsg.sender === 'user') {
+        const lastIsError = Boolean(
+          lastMsg &&
+          lastMsg.sender === 'agent' &&
+          (lastMsg.isError || String(lastMsg.text || '').trim().startsWith('❌'))
+        );
+        if (lastMsg && (lastMsg.sender === 'user' || lastIsError)) {
           await checkUnresolvedLastMessage();
           return;
         }
@@ -391,7 +521,7 @@ export function ChatConsole({ user, isActive = true }) {
 
         if (taskData.status === 'COMPLETED') {
           const respTime = taskData.completed_at
-            ? new Date(taskData.completed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            ? formatTaskTime(taskData.completed_at)
             : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
           const completedMsg = {
