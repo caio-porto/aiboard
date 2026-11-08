@@ -451,7 +451,10 @@ export function ChatConsole({ user }) {
                 }`}
               >
                 <div className="min-w-0 flex-1 pr-1.5">
-                  <div className="text-xs truncate font-semibold leading-tight">
+                  <div
+                    className="text-xs truncate font-semibold leading-tight"
+                    data-no-i18n={sess.title && sess.title !== 'Nova Conversa' ? 'true' : undefined}
+                  >
                     {sess.title === 'Nova Conversa' ? t('chat.newConversation') : (sess.title || t('chat.untitledConversation'))}
                   </div>
                   <div className="text-[10px] text-[#5A6B61] flex items-center gap-1.5 mt-0.5 truncate">
@@ -499,7 +502,10 @@ export function ChatConsole({ user }) {
               <History className="w-4 h-4" />
             </button>
             <div className="min-w-0">
-              <h2 className="font-extrabold text-xs md:text-sm text-[#16422B] truncate leading-tight">
+              <h2
+                className="font-extrabold text-xs md:text-sm text-[#16422B] truncate leading-tight"
+                data-no-i18n={activeSession.title && activeSession.title !== 'Nova Conversa' ? 'true' : undefined}
+              >
                 {activeSession.title === 'Nova Conversa' ? t('chat.newConversation') : (activeSession.title || t('chat.operationalIntelligenceCenter'))}
               </h2>
               <span className="text-[10px] text-[#5A6B61] font-semibold flex items-center gap-1 truncate">
@@ -545,11 +551,13 @@ export function ChatConsole({ user }) {
                       : 'bg-[#F8FAF9] text-[#1A202C] border border-[#E2E8E4] rounded-bl-none shadow-xs'
                   }`}
                 >
-                  {isUser ? (
-                    <div className="whitespace-pre-wrap font-medium text-xs md:text-sm">{displayMsgText}</div>
-                  ) : (
-                    <MarkdownRenderer content={displayMsgText} />
-                  )}
+                  <div data-no-i18n={m.id !== 'welcome' ? 'true' : undefined}>
+                    {isUser ? (
+                      <div className="whitespace-pre-wrap font-medium text-xs md:text-sm">{displayMsgText}</div>
+                    ) : (
+                      <MarkdownRenderer content={displayMsgText} />
+                    )}
+                  </div>
 
                   {!isUser && !m.isError && (
                     <div className="mt-2 pt-2 border-t border-[#E2E8E4]/60 flex items-center justify-between gap-2 text-[11px] text-[#5A6B61]">

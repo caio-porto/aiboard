@@ -234,7 +234,12 @@ function translateDomSubtree(rootNode, lang) {
   const processTextNode = (textNode) => {
     const parent = textNode.parentElement;
     if (!parent || SKIP_TAGS.has(parent.tagName)) return;
-    if (parent.closest && parent.closest('[data-no-i18n="true"]')) return;
+    if (parent.closest && parent.closest('[data-no-i18n="true"]')) {
+      if (textNode.__i18nOrig !== undefined && textNode.nodeValue !== textNode.__i18nOrig) {
+        textNode.nodeValue = textNode.__i18nOrig;
+      }
+      return;
+    }
 
     const currentVal = textNode.nodeValue;
     if (!currentVal || !currentVal.trim()) return;

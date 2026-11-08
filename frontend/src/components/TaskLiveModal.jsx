@@ -655,7 +655,10 @@ export function TaskLiveModal({ taskId, isOpen, onClose, user, taskUserName }) {
                     )}
                   </div>
 
-                  <div className="text-slate-200 whitespace-pre-wrap break-words leading-relaxed text-[11px] pl-0.5 select-text">
+                  <div
+                    className="text-slate-200 whitespace-pre-wrap break-words leading-relaxed text-[11px] pl-0.5 select-text"
+                    data-no-i18n="true"
+                  >
                     {log.message}
                   </div>
                 </div>
@@ -669,7 +672,7 @@ export function TaskLiveModal({ taskId, isOpen, onClose, user, taskUserName }) {
                 <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
                 {t('taskLive.errorRecorded')}
               </div>
-              <div className="text-[11px] whitespace-pre-wrap break-words pl-6">{taskError}</div>
+              <div className="text-[11px] whitespace-pre-wrap break-words pl-6" data-no-i18n="true">{taskError}</div>
             </div>
           )}
 

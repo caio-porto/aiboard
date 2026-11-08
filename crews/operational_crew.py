@@ -652,29 +652,50 @@ def create_operational_crew(
         raw_tools = list(tools_for_agent.get(a_id, []))
         # Garante que o COO tenha acesso direto à Intranet Mall e Gmail para encaminhar boletos e circulares
         if a_id == "agent-coo":
-            from tools.intranetmall_tools import (
-                IntranetMallDailyAuditTool,
-                IntranetMallBoletosTool,
-                IntranetMallVendasTool,
-                IntranetMallCircularesTool,
-                IntranetMallOSTool
-            )
-            raw_tools.extend([
-                IntranetMallDailyAuditTool(),
-                IntranetMallBoletosTool(),
-                IntranetMallVendasTool(),
-                IntranetMallCircularesTool(),
-                IntranetMallOSTool(),
-                GmailSendEmailTool(),
-                ERPSalesFinancialTool()
-            ])
+            raw_tools.append(GmailSendEmailTool())
+            if ERPSalesFinancialTool is not None:
+                raw_tools.append(ERPSalesFinancialTool())
+            try:
+                try:
+                    from custom_tools.intranetmall_tools import (
+                        IntranetMallDailyAuditTool,
+                        IntranetMallBoletosTool,
+                        IntranetMallVendasTool,
+                        IntranetMallCircularesTool,
+                        IntranetMallOSTool
+                    )
+                except ImportError:
+                    from tools.intranetmall_tools import (
+                        IntranetMallDailyAuditTool,
+                        IntranetMallBoletosTool,
+                        IntranetMallVendasTool,
+                        IntranetMallCircularesTool,
+                        IntranetMallOSTool
+                    )
+                raw_tools.extend([
+                    IntranetMallDailyAuditTool(),
+                    IntranetMallBoletosTool(),
+                    IntranetMallVendasTool(),
+                    IntranetMallCircularesTool(),
+                    IntranetMallOSTool(),
+                ])
+            except ImportError:
+                pass
         elif a_id == "agent-coo-logistics":
-            raw_tools.extend([ERPInventoryForecastTool(), ERPStockCheckTool()])
+            for _cls in (ERPInventoryForecastTool, ERPStockCheckTool):
+                if _cls is not None:
+                    raw_tools.append(_cls())
         elif a_id == "agent-cfo-accounting":
             raw_tools.append(JVRioAccountingAuditTool())
         elif a_id in ("agent-cmo", "agent-cmo-ads", "agent-cmo-creative"):
-            from tools.marketing_tools import MarketingGrowthAuditTool
-            raw_tools.append(MarketingGrowthAuditTool())
+            try:
+                try:
+                    from custom_tools.marketing_tools import MarketingGrowthAuditTool
+                except ImportError:
+                    from tools.marketing_tools import MarketingGrowthAuditTool
+                raw_tools.append(MarketingGrowthAuditTool())
+            except ImportError:
+                pass
 
         raw_tools.extend([
             TelegramAlertTool(),
@@ -776,6 +797,11 @@ def create_operational_crew(
     lead_pers = get_agent_personality(lead_node["id"])
     lead_guidelines = (lead_pers.get("guidelines") or "").strip()
 
+    lang_rule = (
+        "\n🌐 IDIOMA DE RESPOSTA: Responda SEMPRE no mesmo idioma em que o usuário escreveu a pergunta/solicitação "
+        "(se a pergunta estiver em inglês, responda 100% em inglês; se estiver em espanhol, em espanhol; se estiver em português, em português)."
+    )
+
     if is_full_report:
         lead_task_desc = (
             f"Como CEO e Líder Geral da organização, consolide os levantamentos da sua equipe para responder à solicitação: '{user_request}'.\n"
@@ -785,8 +811,9 @@ def create_operational_crew(
             "3. **[AÇÃO JÁ EXECUTADA]:** Ações autônomas já realizadas pelos agentes\n"
             "4. **[DECISÃO NECESSÁRIA]:** O que precisa de 1 clique/aprovação humana\n"
             "⚠️ DIRETRIZ DE VERACIDADE RIGOROSA: Os valores numéricos DEVEM ser 100% fiéis aos relatórios oficiais e ferramentas. Zero dados fictícios."
+            f"{lang_rule}"
         )
-        lead_expected_output = "Relatório Executivo consolidado no padrão Zero-Click Resolution com dados 100% verídicos."
+        lead_expected_output = "Relatório Executivo consolidado no padrão Zero-Click Resolution com dados 100% verídicos, no idioma da pergunta."
     elif custom_response_format:
         lead_task_desc = (
             f"Como Líder Geral da organização, responda à solicitação do usuário: '{user_request}'.\n\n"
@@ -796,8 +823,9 @@ def create_operational_crew(
             f"{lead_guidelines}\n\n"
             f"{'🧠 ATENÇÃO: O usuário enviou uma nova regra ou feedback. Utilize a ferramenta learned_rules_memory com action=add para gravá-la permanentemente e confirme na resposta!' if is_learning_feedback else ''}\n"
             f"⚠️ DIRETRIZ DE VERACIDADE RIGOROSA: Baseie-se estritamente nos dados oficiais levantados pelas ferramentas. Zero alucinação."
+            f"{lang_rule}"
         )
-        lead_expected_output = "Resposta final em Markdown seguindo estritamente as Regras de Formato configuradas na interface."
+        lead_expected_output = "Resposta final em Markdown seguindo estritamente as Regras de Formato configuradas na interface, no idioma da pergunta."
     else:
         lead_task_desc = (
             f"Como Líder Geral da organização, responda de forma DIRETA, OBJETIVA e CONCISA à solicitação do usuário: '{user_request}'.\n\n"
@@ -805,8 +833,9 @@ def create_operational_crew(
             "1. Responda DIRETAMENTE ao que foi solicitado logo na primeira linha, sem enrolação ou preâmbulos.\n"
             "2. Se a pergunta solicitar dados, lista, nomes, horários ou tabelas, apresente DIRETAMENTE a tabela/dados solicitados em Markdown limpo.\n"
             "⚠️ DIRETRIZ DE VERACIDADE RIGOROSA: Baseie-se estritamente nos dados oficiais levantados pelas ferramentas. Zero alucinação."
+            f"{lang_rule}"
         )
-        lead_expected_output = "Resposta Executiva Direta em Markdown limpo, concisa, objetiva, contendo apenas a resposta e tabela solicitada."
+        lead_expected_output = "Resposta Executiva Direta em Markdown limpo, concisa, objetiva, contendo apenas a resposta e tabela solicitada, no idioma da pergunta."
 
     tasks: List[Task] = []
     selected_agents: List[Agent] = []

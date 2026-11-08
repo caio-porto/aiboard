@@ -405,13 +405,15 @@ export function HistoryView({ user }) {
                 <span className="text-[#5A6B61] font-bold block text-[10px] uppercase tracking-wider mb-0.5">
                   {t('history.collaboratorQuestion')}
                 </span>
-                {taskItem.prompt}
+                <span data-no-i18n="true">{taskItem.prompt}</span>
               </div>
 
               {/* Resultado Formatado em Markdown com Ações de Compartilhamento */}
               {taskItem.result && (
                 <div className="pt-2 border-t border-[#E2E8E4] space-y-3">
-                  <MarkdownRenderer content={taskItem.result} />
+                  <div data-no-i18n="true">
+                    <MarkdownRenderer content={taskItem.result} />
+                  </div>
 
                   {/* Barra de Compartilhamento do Boletim */}
                   <div className="p-2.5 bg-gray-50 rounded-xl border border-gray-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -478,7 +480,7 @@ export function HistoryView({ user }) {
 
               {/* Erro */}
               {taskItem.error && (
-                <div className="p-2.5 rounded-xl bg-red-50 text-red-700 text-xs font-mono">
+                <div className="p-2.5 rounded-xl bg-red-50 text-red-700 text-xs font-mono" data-no-i18n="true">
                   {taskItem.error}
                 </div>
               )}
