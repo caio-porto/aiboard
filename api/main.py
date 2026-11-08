@@ -160,6 +160,8 @@ class SettingsRequest(BaseModel):
     allowed_domains: Optional[str] = Field(None, description="Domínios corporativos autorizados no login OAuth")
     google_client_id: Optional[str] = Field(None, description="Google OAuth 2.0 Client ID")
     default_language: Optional[str] = Field(None, description="Idioma padrão da plataforma ('en', 'pt-BR', 'es')")
+    currency_code: Optional[str] = Field(None, description="Código da moeda padrão ('USD', 'BRL', 'EUR', 'GBP')")
+    currency_symbol: Optional[str] = Field(None, description="Símbolo da moeda ('$', 'R$', '€', '£')")
     company_name: Optional[str] = Field(None, description="Nome da marca / organização")
     company_legal_name: Optional[str] = Field(None, description="Razão social da empresa")
     company_logo_url: Optional[str] = Field(None, description="URL da logomarca oficial")
@@ -926,6 +928,10 @@ def get_settings():
                 configured_logo = "/api/branding/logo"
                 break
 
+    currency_code = (get_setting("currency_code") or os.getenv("DEFAULT_CURRENCY", "BRL")).upper()
+    default_symbol = "$" if currency_code == "USD" else ("€" if currency_code == "EUR" else ("£" if currency_code == "GBP" else "R$"))
+    currency_symbol = get_setting("currency_symbol") or os.getenv("CURRENCY_SYMBOL", default_symbol)
+
     return {
         "max_daily_budget_brl": round(max_daily_budget, 2),
         "kill_switch_active": kill_switch,
@@ -941,6 +947,8 @@ def get_settings():
         "allowed_domains": get_setting("allowed_domains") or os.getenv("ALLOWED_GOOGLE_DOMAINS", "*"),
         "google_client_id": get_setting("google_client_id") or os.getenv("GOOGLE_CLIENT_ID", ""),
         "default_language": get_setting("default_language") or os.getenv("DEFAULT_LANGUAGE", "en"),
+        "currency_code": currency_code,
+        "currency_symbol": currency_symbol,
         "installed_tools": catalog_items.get("installed_tools", []),
         "installed_triggers": catalog_items.get("installed_triggers", []),
         "company_name": get_setting("company_name") or os.getenv("COMPANY_NAME", "AI Board"),
@@ -1031,6 +1039,12 @@ def save_settings(req: SettingsRequest, admin: Dict[str, Any] = Depends(require_
 
     if req.default_language is not None and req.default_language.strip() in ("en", "pt-BR", "es"):
         set_setting("default_language", req.default_language.strip())
+
+    if req.currency_code is not None and req.currency_code.strip():
+        set_setting("currency_code", req.currency_code.strip().upper())
+
+    if req.currency_symbol is not None and req.currency_symbol.strip():
+        set_setting("currency_symbol", req.currency_symbol.strip())
 
     if req.company_name is not None and req.company_name.strip():
         set_setting("company_name", req.company_name.strip())
@@ -1604,6 +1618,8 @@ def get_cost_estimate_endpoint(model_override: Optional[str] = None):
             "savings_percentage": savings_pct
         },
         "exchange_rate_usd_brl": exchange_rate,
+        "currency_code": (get_setting("currency_code") or os.getenv("DEFAULT_CURRENCY", "BRL")).upper(),
+        "currency_symbol": get_setting("currency_symbol") or os.getenv("CURRENCY_SYMBOL", "$" if (get_setting("currency_code") or os.getenv("DEFAULT_CURRENCY", "BRL")).upper() == "USD" else ("€" if (get_setting("currency_code") or os.getenv("DEFAULT_CURRENCY", "BRL")).upper() == "EUR" else ("£" if (get_setting("currency_code") or os.getenv("DEFAULT_CURRENCY", "BRL")).upper() == "GBP" else "R$"))),
         "system_default_model": system_default_model
     }
 

@@ -1003,6 +1003,10 @@ def is_daily_budget_exceeded() -> tuple[bool, float, float, int, int]:
     else:
         estimated_cost_today = runs_today * 0.225
 
+    currency_code = (get_setting("currency_code") or os.getenv("DEFAULT_CURRENCY", "BRL")).upper()
+    if currency_code == "USD":
+        estimated_cost_today = estimated_cost_today / 5.50
+
     is_exceeded = estimated_cost_today >= max_budget
     return is_exceeded, round(estimated_cost_today, 2), max_budget, runs_today, steps_today
 

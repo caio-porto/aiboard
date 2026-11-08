@@ -40,7 +40,8 @@ import {
   ToggleRight,
   UserCheck,
   Send,
-  Coins
+  Coins,
+  DollarSign
 } from 'lucide-react';
 import { OFFICIAL_LOGO_URL, getOfficialLogoUrl, getOfficialBrandName } from '../utils/reportFormatters';
 import { CompanyLogo } from './CompanyLogo';
@@ -100,6 +101,8 @@ export function StatusView({ user }) {
   const [costEstimate, setCostEstimate] = useState(null);
   const [maxDailyBudget, setMaxDailyBudget] = useState('5.00');
   const [killSwitchActive, setKillSwitchActive] = useState(true);
+  const [selectedCurrency, setSelectedCurrency] = useState('BRL');
+  const [customCurrencySymbol, setCustomCurrencySymbol] = useState('R$');
   const [budgetSaving, setBudgetSaving] = useState(false);
   const [budgetToast, setBudgetToast] = useState('');
   const [costLoading, setCostLoading] = useState(false);
@@ -173,6 +176,9 @@ export function StatusView({ user }) {
   const isProgrammaticScroll = useRef(false);
   const scrollTimeoutRef = useRef(null);
   const isAdmin = user?.role === 'admin';
+  const currencyCode = (selectedCurrency || settings?.currency_code || (i18n.language === 'pt-BR' ? 'BRL' : 'USD')).toUpperCase();
+  const currencySymbol = customCurrencySymbol || settings?.currency_symbol || (currencyCode === 'USD' ? '$' : (currencyCode === 'EUR' ? '€' : (currencyCode === 'GBP' ? '£' : 'R$')));
+  const isUSD = currencyCode === 'USD';
 
   const navItems = [
     { id: 'sec-ai', label: t('status.secAi'), icon: Cpu },
@@ -283,6 +289,8 @@ export function StatusView({ user }) {
         setSelectedModel(data.gemini_model || 'gemini-3.8-flash-medium');
         if (data.max_daily_budget_brl !== undefined) setMaxDailyBudget(String(data.max_daily_budget_brl));
         if (data.kill_switch_active !== undefined) setKillSwitchActive(Boolean(data.kill_switch_active));
+        if (data.currency_code) setSelectedCurrency(data.currency_code);
+        if (data.currency_symbol) setCustomCurrencySymbol(data.currency_symbol);
         if (data.partner_emails !== undefined) setPartnerEmails(data.partner_emails);
         if (data.allowed_domains !== undefined) setAllowedDomains(data.allowed_domains);
         if (data.company_name !== undefined) setCompanyName(data.company_name);
@@ -621,7 +629,9 @@ export function StatusView({ user }) {
         },
         body: JSON.stringify({
           max_daily_budget_brl: parseFloat(maxDailyBudget) || 5.0,
-          kill_switch_active: killSwitchActive
+          kill_switch_active: killSwitchActive,
+          currency_code: currencyCode,
+          currency_symbol: currencySymbol
         })
       });
       if (res.ok) {
@@ -651,6 +661,8 @@ export function StatusView({ user }) {
         gemini_model: selectedModel,
         max_daily_budget_brl: parseFloat(maxDailyBudget) || 5.0,
         kill_switch_active: killSwitchActive,
+        currency_code: currencyCode,
+        currency_symbol: currencySymbol,
         partner_emails: partnerEmails.trim(),
         allowed_domains: allowedDomains.trim(),
         company_name: companyName.trim(),
@@ -1175,7 +1187,7 @@ export function StatusView({ user }) {
             <Sparkles className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
           </div>
           <div className="text-xl font-black whitespace-nowrap">
-            R$ {costEstimate?.combined_total?.cost_brl_month?.toFixed(2) || '0.00'}
+            {currencySymbol} {isUSD ? (costEstimate?.combined_total?.cost_usd_month?.toFixed(2) || '0.00') : (costEstimate?.combined_total?.cost_brl_month?.toFixed(2) || '0.00')}
             <span className="text-[11px] font-normal text-emerald-200"> {t('status.perMonth')}</span>
           </div>
           <div className="text-[10.5px] text-emerald-100/90 pt-1 border-t border-emerald-800 flex items-center justify-between gap-2">
@@ -1414,33 +1426,35 @@ export function StatusView({ user }) {
               <div className="p-4 bg-[#F8FAF9] rounded-xl border border-[#E2E8E4] flex flex-col justify-between space-y-3">
                 <div>
                   <label className="block text-xs font-bold text-[#1A202C]">
-                    Teto Máximo Diário:
+                    {t('status.maxDailyBudget')}
                   </label>
                   <p className="text-[11px] text-[#5A6B61] mt-0.5">
-                    Limite orçamentário seguro em Reais para todas as tarefas das últimas 24h.
+                    {t('status.maxDailyBudgetDesc')}
                   </p>
                 </div>
                 
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-[#5A6B61]">R$</span>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-[#5A6B61]">{currencySymbol}</span>
                     <input
                       type="number"
-                      step="0.50"
-                      min="1.00"
-                      max="100.00"
+                      step={isUSD ? "0.10" : "0.50"}
+                      min="0.50"
+                      max="1000.00"
                       value={maxDailyBudget}
                       onChange={(e) => setMaxDailyBudget(e.target.value)}
                       className="w-full bg-white border border-[#E2E8E4] rounded-lg pl-9 pr-3 py-2 text-sm font-bold font-mono text-[#1A202C] focus:outline-none focus:border-[#16422B] shadow-2xs"
-                      placeholder="5.00"
+                      placeholder={isUSD ? "1.00" : "5.00"}
                     />
                   </div>
-                  <span className="text-xs font-semibold text-[#5A6B61] whitespace-nowrap">/ dia</span>
+                  <span className="text-xs font-semibold text-[#5A6B61] whitespace-nowrap">{t('status.perDay')}</span>
                 </div>
 
                 <div className="pt-2 border-t border-[#E2E8E4]/60 flex items-center justify-between text-[11px] text-[#5A6B61]">
-                  <span>Sugestão de Operação:</span>
-                  <span className="font-semibold text-[#1A202C]">R$ 2,00 a R$ 5,00/dia</span>
+                  <span>{t('status.recommendedRange')}</span>
+                  <span className="font-semibold text-[#1A202C]">
+                    {isUSD ? '$ 0.50 to $ 1.50 / day' : (i18n.language === 'en' ? `${currencySymbol} 2.00 to ${currencySymbol} 5.00 / day` : `${currencySymbol} 2,00 a ${currencySymbol} 5,00 / dia`)}
+                  </span>
                 </div>
               </div>
 
@@ -1519,18 +1533,18 @@ export function StatusView({ user }) {
             <div className="p-4 bg-[#F4F7F5] rounded-xl border border-[#E2E8E4] space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-2">
-                  <span className="font-bold text-[#1A202C]">Consumo Estimado (Últimas 24h):</span>
+                  <span className="font-bold text-[#1A202C]">{tr('Consumo Estimado (Últimas 24h):')}</span>
                   {settings?.runs_today ? (
                     <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white border border-[#E2E8E4] text-[#5A6B61] whitespace-nowrap">
-                      {settings.runs_today} execuções {settings.steps_today ? `· ${settings.steps_today} interações` : ''}
+                      {settings.runs_today} {tr('execuções')} {settings.steps_today ? `· ${settings.steps_today} ${tr('interações')}` : ''}
                     </span>
                   ) : null}
                 </div>
                 <div className="font-mono font-bold text-sm whitespace-nowrap">
                   <span className={settings?.daily_budget_exceeded ? 'text-red-600 font-extrabold' : 'text-[#1A202C]'}>
-                    R$ {(settings?.cost_today_brl || 0).toFixed(2)}
+                    {currencySymbol} {(settings?.cost_today_brl || 0).toFixed(2)}
                   </span>
-                  <span className="text-[#5A6B61] font-normal text-xs ml-1">/ R$ {(parseFloat(maxDailyBudget) || 5).toFixed(2)}</span>
+                  <span className="text-[#5A6B61] font-normal text-xs ml-1">/ {currencySymbol} {(parseFloat(maxDailyBudget) || (isUSD ? 1.0 : 5.0)).toFixed(2)}</span>
                 </div>
               </div>
 
@@ -1538,20 +1552,20 @@ export function StatusView({ user }) {
               <div className="w-full bg-[#E2E8E4] rounded-full h-2.5 overflow-hidden">
                 <div 
                   className={`h-full rounded-full transition-all ${
-                    (settings?.cost_today_brl || 0) >= (parseFloat(maxDailyBudget) || 5)
+                    (settings?.cost_today_brl || 0) >= (parseFloat(maxDailyBudget) || (isUSD ? 1.0 : 5.0))
                       ? 'bg-red-600'
-                      : (settings?.cost_today_brl || 0) >= (parseFloat(maxDailyBudget) || 5) * 0.7
+                      : (settings?.cost_today_brl || 0) >= (parseFloat(maxDailyBudget) || (isUSD ? 1.0 : 5.0)) * 0.7
                       ? 'bg-amber-500'
                       : 'bg-emerald-600'
                   }`}
                   style={{
-                    width: `${Math.min(100, (((settings?.cost_today_brl || 0) / (parseFloat(maxDailyBudget) || 5)) * 100))}%`
+                    width: `${Math.min(100, (((settings?.cost_today_brl || 0) / (parseFloat(maxDailyBudget) || (isUSD ? 1.0 : 5.0))) * 100))}%`
                   }}
                 />
               </div>
 
               {/* Alerta de Circuit Breaker Limpo e Destacado */}
-              {(settings?.cost_today_brl || 0) >= (parseFloat(maxDailyBudget) || 5) ? (
+              {(settings?.cost_today_brl || 0) >= (parseFloat(maxDailyBudget) || (isUSD ? 1.0 : 5.0)) ? (
                 <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
                   <ShieldAlert className="w-4 h-4 shrink-0 text-red-600" />
                   <span>{tr('Teto diário excedido. Circuit Breaker ativado no backend: novas tarefas serão bloqueadas preventivamente.')}</span>
@@ -1629,24 +1643,24 @@ export function StatusView({ user }) {
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[10px] font-extrabold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1">
                     <Clock className="w-3 h-3 text-emerald-700" />
-                    Rotinas Agendadas (CRON)
+                    {tr('Rotinas Agendadas (CRON)')}
                   </span>
                   <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                    Fixo Mensal
+                    {t('status.fixedMonthly')}
                   </span>
                 </div>
                 <div className="flex items-baseline gap-1.5">
                   <span className="text-xl font-black text-[#16422B]">
-                    R$ {costEstimate?.scheduled_tasks?.cost_brl_month?.toFixed(2) || '0.00'}
+                    {currencySymbol} {isUSD ? (costEstimate?.scheduled_tasks?.cost_usd_month?.toFixed(2) || '0.00') : (costEstimate?.scheduled_tasks?.cost_brl_month?.toFixed(2) || '0.00')}
                   </span>
                   <span className="text-[11px] font-semibold text-[#5A6B61]">
-                    / mês (${costEstimate?.scheduled_tasks?.cost_usd_month?.toFixed(2) || '0.00'})
+                    {t('status.perMonth')} ({isUSD ? `R$ ${costEstimate?.scheduled_tasks?.cost_brl_month?.toFixed(2) || '0.00'}` : `$${costEstimate?.scheduled_tasks?.cost_usd_month?.toFixed(2) || '0.00'}`})
                   </span>
                 </div>
                 <div className="mt-2 pt-2 border-t border-emerald-100/60 flex items-center justify-between text-[10px] text-[#5A6B61]">
-                  <span>{costEstimate?.scheduled_tasks?.monthly_executions || 0} execuções/mês</span>
+                  <span>{costEstimate?.scheduled_tasks?.monthly_executions || 0} {t('status.runsPerMonth')}</span>
                   <span className="font-bold text-emerald-800">
-                    R$ {costEstimate?.scheduled_tasks?.cost_brl_day?.toFixed(2) || '0.00'}/dia
+                    {currencySymbol} {isUSD ? (costEstimate?.scheduled_tasks?.cost_usd_day?.toFixed(2) || '0.00') : (costEstimate?.scheduled_tasks?.cost_brl_day?.toFixed(2) || '0.00')} {t('status.perDay')}
                   </span>
                 </div>
               </div>
@@ -1662,24 +1676,24 @@ export function StatusView({ user }) {
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[10px] font-extrabold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1">
                     <MessageSquare className="w-3 h-3 text-teal-700" />
-                    Interações de Chat
+                    {tr('Interações de Chat')}
                   </span>
                   <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-teal-100 text-teal-800">
-                    Sob Demanda
+                    {t('status.onDemand')}
                   </span>
                 </div>
                 <div className="flex items-baseline gap-1.5">
                   <span className="text-xl font-black text-[#16422B]">
-                    R$ {costEstimate?.chat_interactions?.cost_brl_month?.toFixed(2) || '0.00'}
+                    {currencySymbol} {isUSD ? (costEstimate?.chat_interactions?.cost_usd_month?.toFixed(2) || '0.00') : (costEstimate?.chat_interactions?.cost_brl_month?.toFixed(2) || '0.00')}
                   </span>
                   <span className="text-[11px] font-semibold text-[#5A6B61]">
-                    / mês (${costEstimate?.chat_interactions?.cost_usd_month?.toFixed(2) || '0.00'})
+                    {t('status.perMonth')} ({isUSD ? `R$ ${costEstimate?.chat_interactions?.cost_brl_month?.toFixed(2) || '0.00'}` : `$${costEstimate?.chat_interactions?.cost_usd_month?.toFixed(2) || '0.00'}`})
                   </span>
                 </div>
                 <div className="mt-2 pt-2 border-t border-teal-100/60 flex items-center justify-between text-[10px] text-[#5A6B61]">
-                  <span>{costEstimate?.chat_interactions?.total_interactions_last_30d || 0} consultas nos 30d</span>
+                  <span>{costEstimate?.chat_interactions?.total_interactions_last_30d || 0} {t('status.queriesIn30d')}</span>
                   <span className="font-bold text-teal-800">
-                    ~R$ {costEstimate?.chat_interactions?.cost_per_interaction_brl?.toFixed(3) || '0.00'}/msg
+                    ~{currencySymbol} {isUSD ? (costEstimate?.chat_interactions?.cost_per_interaction_usd?.toFixed(4) || '0.00') : (costEstimate?.chat_interactions?.cost_per_interaction_brl?.toFixed(3) || '0.00')}/msg
                   </span>
                 </div>
               </div>
@@ -1695,7 +1709,7 @@ export function StatusView({ user }) {
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[10px] font-extrabold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1">
                     <Zap className="w-3 h-3 text-amber-600" />
-                    Total Operacional
+                    {t('status.totalOperational')}
                   </span>
                   <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-200 text-emerald-900 border border-emerald-300">
                     -{costEstimate?.frugal_savings?.savings_percentage || 0}% Frugal
@@ -1703,16 +1717,16 @@ export function StatusView({ user }) {
                 </div>
                 <div className="flex items-baseline gap-1.5">
                   <span className="text-xl font-black text-[#16422B]">
-                    R$ {costEstimate?.combined_total?.cost_brl_month?.toFixed(2) || '0.00'}
+                    {currencySymbol} {isUSD ? (costEstimate?.combined_total?.cost_usd_month?.toFixed(2) || '0.00') : (costEstimate?.combined_total?.cost_brl_month?.toFixed(2) || '0.00')}
                   </span>
                   <span className="text-[11px] font-semibold text-[#5A6B61]">
-                    / mês (${costEstimate?.combined_total?.cost_usd_month?.toFixed(2) || '0.00'})
+                    {t('status.perMonth')} ({isUSD ? `R$ ${costEstimate?.combined_total?.cost_brl_month?.toFixed(2) || '0.00'}` : `$${costEstimate?.combined_total?.cost_usd_month?.toFixed(2) || '0.00'}`})
                   </span>
                 </div>
                 <div className="mt-2 pt-2 border-t border-emerald-100/60 flex items-center justify-between text-[10px] text-[#5A6B61]">
-                  <span>Fixo + Variável</span>
+                  <span>{t('status.fixedPlusVariable')}</span>
                   <span className="font-bold text-emerald-800">
-                    R$ {costEstimate?.combined_total?.cost_brl_day?.toFixed(2) || '0.00'}/dia
+                    {currencySymbol} {isUSD ? (costEstimate?.combined_total?.cost_usd_day?.toFixed(2) || '0.00') : (costEstimate?.combined_total?.cost_brl_day?.toFixed(2) || '0.00')} {t('status.perDay')}
                   </span>
                 </div>
               </div>
@@ -2333,6 +2347,64 @@ export function StatusView({ user }) {
           </div>
 
           <LanguageSelector variant="card" />
+
+          {/* SELETOR DE MOEDA OPERACIONAL DA PLATAFORMA */}
+          <div className="p-4 bg-[#F8FAF9] rounded-2xl border border-[#E2E8E4] space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-800">
+                  <DollarSign className="w-4 h-4 text-emerald-700" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-extrabold text-[#16422B]">
+                    {t('status.platformCurrency')}
+                  </h3>
+                  <p className="text-[11px] text-[#5A6B61]">
+                    {t('status.platformCurrencyDesc')}
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-white border border-[#E2E8E4] text-[#5A6B61] self-start sm:self-auto">
+                {currencyCode} ({currencySymbol})
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { code: 'USD', symbol: '$', label: 'USD ($)', desc: 'US Dollar' },
+                { code: 'BRL', symbol: 'R$', label: 'BRL (R$)', desc: 'Real Brasileiro' },
+                { code: 'EUR', symbol: '€', label: 'EUR (€)', desc: 'Euro' },
+                { code: 'GBP', symbol: '£', label: 'GBP (£)', desc: 'British Pound' },
+              ].map((c) => {
+                const isSelected = (selectedCurrency || 'BRL') === c.code;
+                return (
+                  <button
+                    key={c.code}
+                    type="button"
+                    disabled={!isAdmin}
+                    onClick={() => {
+                      setSelectedCurrency(c.code);
+                      setCustomCurrencySymbol(c.symbol);
+                    }}
+                    className={`p-3 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer disabled:opacity-50 ${
+                      isSelected
+                        ? 'border-emerald-700 bg-emerald-50 text-[#16422B] shadow-xs ring-1 ring-emerald-700/20'
+                        : 'border-[#E2E8E4] bg-white text-[#1A202C] hover:border-emerald-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono font-extrabold text-sm">{c.symbol}</span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#F0F4F2] text-[#5A6B61]">
+                        {c.code}
+                      </span>
+                    </div>
+                    <div className="text-[11px] font-bold mt-1 text-[#1A202C]">{c.label}</div>
+                    <div className="text-[10px] text-[#5A6B61]">{c.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <form onSubmit={(e) => handleSaveAllSettings(e, setParamsToast)} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
