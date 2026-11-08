@@ -734,7 +734,7 @@ export function ChatConsole({ user, isActive = true }) {
   };
 
   return (
-    <div className="w-full max-w-6xl mx-auto h-full flex flex-col md:flex-row gap-3 p-2 md:p-4">
+    <div className="w-full max-w-6xl mx-auto h-full flex flex-col md:flex-row gap-2 md:gap-3 p-1.5 sm:p-2 md:p-4 overflow-hidden">
       {/* 1. BARRA LATERAL DE HISTÓRICO DE CONVERSAS (Estilo ChatGPT / Gemini) */}
       <div
         className={`fixed inset-y-0 left-0 z-40 w-72 bg-white md:static md:w-64 md:h-full border border-[#E2E8E4] rounded-none md:rounded-3xl p-3.5 flex flex-col shadow-xl md:shadow-xs transition-all duration-300 ${
@@ -974,7 +974,7 @@ export function ChatConsole({ user, isActive = true }) {
         {/* Área de Mensagens com scroll interno independente */}
         <div
           ref={messagesContainerRef}
-          className="flex-1 min-h-0 bg-white border border-[#E2E8E4] rounded-3xl p-4 md:p-5 overflow-y-auto space-y-4 shadow-sm"
+          className="flex-1 min-h-0 bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3 sm:p-4 md:p-5 overflow-y-auto space-y-4 shadow-sm"
         >
           {messages.map((m) => {
             const isUser = m.sender === 'user';

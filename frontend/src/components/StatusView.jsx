@@ -1116,11 +1116,11 @@ export function StatusView({ user }) {
   }
 
   return (
-    <div className="max-w-6xl mx-auto h-full p-3 md:p-4 pb-28 md:pb-8 flex flex-col md:flex-row gap-5 overflow-hidden">
+    <div className="w-full max-w-6xl mx-auto h-full p-2 sm:p-3 md:p-4 pb-2 md:pb-4 flex flex-col md:flex-row gap-2.5 md:gap-5 overflow-hidden">
       {/* MENU LATERAL ESQUERDO (STICKY NAVIGATION) */}
-      <aside className="w-full md:w-64 shrink-0 flex flex-col gap-3">
-        <div className="bg-white border border-[#E2E8E4] rounded-3xl p-3.5 shadow-xs">
-          <div className="px-2 pb-2.5 mb-2 border-b border-[#E2E8E4]">
+      <aside className="w-full md:w-64 shrink-0 flex flex-col gap-2 md:gap-3">
+        <div className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-2.5 sm:p-3.5 shadow-xs">
+          <div className="px-1.5 sm:px-2 pb-2 mb-2 border-b border-[#E2E8E4]">
             <div className="text-xs font-extrabold text-[#16422B] tracking-tight truncate">{t('status.controlPanel')}</div>
             <div className="text-[10px] text-[#5A6B61] truncate">{t('status.quickNav')}</div>
           </div>
@@ -1134,7 +1134,7 @@ export function StatusView({ user }) {
                   key={item.id}
                   type="button"
                   onClick={() => scrollToSection(item.id)}
-                  className={`flex items-center gap-2.5 px-3 py-2.5 rounded-2xl text-xs font-bold transition whitespace-nowrap cursor-pointer text-left min-w-0 ${
+                  className={`flex items-center gap-2 px-2.5 py-2 md:gap-2.5 md:px-3 md:py-2.5 rounded-xl md:rounded-2xl text-xs font-bold transition whitespace-nowrap cursor-pointer text-left min-w-0 ${
                     isActive
                       ? 'bg-[#16422B] text-white shadow-xs'
                       : 'text-[#3A4A40] hover:bg-[#EFF5F1] hover:text-[#16422B]'
@@ -1180,7 +1180,7 @@ export function StatusView({ user }) {
       {/* CONTEÚDO PRINCIPAL COM ROLAGEM SUAVE */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 h-full overflow-y-auto space-y-6 pr-1 scroll-smooth min-w-0"
+        className="flex-1 min-h-0 overflow-y-auto space-y-4 md:space-y-6 pr-0.5 md:pr-1 scroll-smooth min-w-0 pb-6 md:pb-4"
       >
         {!isAdmin && (
           <div className="bg-emerald-50/70 border border-emerald-200 rounded-3xl p-4 flex items-center gap-3 text-xs text-emerald-900 font-medium">
@@ -1194,23 +1194,23 @@ export function StatusView({ user }) {
         {/* =========================================================
             1. SEÇÃO: MODELO DE IA & CUSTOS OPERACIONAIS
         ========================================================= */}
-        <section id="sec-ai" className="bg-white border border-[#E2E8E4] rounded-3xl p-6 shadow-xs scroll-mt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#E2E8E4] mb-5">
+        <section id="sec-ai" className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3.5 sm:p-5 md:p-6 shadow-xs scroll-mt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#E2E8E4] mb-4 md:mb-5">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="p-2.5 rounded-2xl bg-[#EFF5F1] text-[#16422B] shrink-0">
+              <div className="p-2 sm:p-2.5 rounded-2xl bg-[#EFF5F1] text-[#16422B] shrink-0">
                 <Cpu className="w-5 h-5 text-[#16422B]" />
               </div>
               <div className="min-w-0">
-                <h2 className="text-base font-extrabold text-[#16422B] truncate">
+                <h2 className="text-sm sm:text-base font-extrabold text-[#16422B] truncate">
                   {t('status.aiEngineTitle')}
                 </h2>
-                <p className="text-xs text-[#5A6B61]">
+                <p className="text-[11px] sm:text-xs text-[#5A6B61]">
                   {t('status.aiEngineDesc')}
                 </p>
               </div>
             </div>
 
-            <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100 flex items-center gap-1.5 whitespace-nowrap shrink-0">
+            <span className="text-[10.5px] sm:text-[11px] font-extrabold text-emerald-700 bg-emerald-50 px-2.5 sm:px-3 py-1 rounded-full border border-emerald-100 flex items-center gap-1.5 whitespace-nowrap shrink-0">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
               {settings?.gemini_model || t('common.loading')}
             </span>
@@ -1223,7 +1223,7 @@ export function StatusView({ user }) {
                   <label className="block text-xs font-bold text-[#1A202C]">
                     Motor Padrão do Sistema & Fallback de Contingência:
                   </label>
-                  <span className="text-[11px] text-[#5A6B61] bg-[#F4F7F5] px-2.5 py-0.5 rounded-lg border border-[#E2E8E4] flex items-center gap-1">
+                  <span className="text-[10px] sm:text-[11px] text-[#5A6B61] bg-[#F4F7F5] px-2 py-0.5 rounded-lg border border-[#E2E8E4] inline-flex items-center gap-1">
                     <span>💡</span> Cada agente no <strong>Blocos & Conexões</strong> tem seu próprio modelo prioritário
                   </span>
                 </div>
@@ -1705,7 +1705,7 @@ export function StatusView({ user }) {
         {/* =========================================================
             2. SEÇÃO: CENTRAL DE ROTINAS & TAREFAS AGENDADAS (CRON + AUTO-DELEGAÇÃO)
         ========================================================= */}
-        <section id="sec-tasks" className="bg-white border border-[#E2E8E4] rounded-3xl p-6 shadow-xs space-y-4 scroll-mt-4">
+        <section id="sec-tasks" className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3.5 sm:p-5 md:p-6 shadow-xs space-y-4 scroll-mt-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#E2E8E4]">
             <div className="flex items-start sm:items-center gap-3 min-w-0">
               <div className="p-2.5 rounded-2xl bg-emerald-50 text-[#16422B] shrink-0">
@@ -1950,7 +1950,7 @@ export function StatusView({ user }) {
         {/* =========================================================
             3. SEÇÃO: VALIDAÇÃO DE AÇÕES & AUTONOMIA (HUMAN-IN-THE-LOOP)
         ========================================================= */}
-        <section id="sec-approval" className="bg-white border border-[#E2E8E4] rounded-3xl p-6 shadow-xs space-y-5 scroll-mt-4">
+        <section id="sec-approval" className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3.5 sm:p-5 md:p-6 shadow-xs space-y-5 scroll-mt-4">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-[#E2E8E4]">
             <div className="flex items-start sm:items-center gap-3 min-w-0">
               <div className="p-2.5 rounded-2xl bg-amber-50 text-amber-800 shrink-0 mt-0.5 sm:mt-0">
@@ -2217,7 +2217,7 @@ export function StatusView({ user }) {
         {/* =========================================================
             4. SEÇÃO: DEPARTAMENTOS & ORGANOGRAMA (DINÂMICO)
         ========================================================= */}
-        <section id="sec-departments" className="bg-white border border-[#E2E8E4] rounded-3xl p-6 shadow-xs space-y-5 scroll-mt-4">
+        <section id="sec-departments" className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3.5 sm:p-5 md:p-6 shadow-xs space-y-5 scroll-mt-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E2E8E4]">
             <div className="flex items-center gap-3">
               <div className="p-2.5 rounded-2xl bg-blue-50 text-blue-800">
@@ -2297,7 +2297,7 @@ export function StatusView({ user }) {
             ))}
           </div>
         </section>
-        <section id="sec-params" className="bg-white border border-[#E2E8E4] rounded-3xl p-6 shadow-xs space-y-5 scroll-mt-4">
+        <section id="sec-params" className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3.5 sm:p-5 md:p-6 shadow-xs space-y-5 scroll-mt-4">
           <div className="flex items-center justify-between pb-4 border-b border-[#E2E8E4]">
             <div className="flex items-center gap-3">
               <div className="p-2.5 rounded-2xl bg-purple-50 text-purple-800">
@@ -2541,7 +2541,7 @@ export function StatusView({ user }) {
             4. SEÇÃO: GESTÃO DE ACESSOS & USUÁRIOS
         ========================================================= */}
         {isAdmin && (
-          <section id="sec-users" className="bg-white border border-[#E2E8E4] rounded-3xl p-6 shadow-xs space-y-4 scroll-mt-4">
+          <section id="sec-users" className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3.5 sm:p-5 md:p-6 shadow-xs space-y-4 scroll-mt-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E2E8E4]">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-2xl bg-amber-50 text-amber-700">
@@ -2662,7 +2662,7 @@ export function StatusView({ user }) {
         {/* =========================================================
             5. SEÇÃO: BACKUP OFICIAL GOOGLE DRIVE (CONFIGURÁVEL VIA UI)
         ========================================================= */}
-        <section id="sec-backup" className="bg-white border border-[#E2E8E4] rounded-3xl p-6 shadow-xs space-y-4 scroll-mt-4">
+        <section id="sec-backup" className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3.5 sm:p-5 md:p-6 shadow-xs space-y-4 scroll-mt-4">
           <div className="flex items-center justify-between pb-4 border-b border-[#E2E8E4]">
             <div className="flex items-center gap-3">
               <div className="p-2.5 rounded-2xl bg-blue-50 text-blue-700">
@@ -2787,7 +2787,7 @@ export function StatusView({ user }) {
         {/* =========================================================
             6. SEÇÃO: MICROSERVIÇOS & INTEGRAÇÕES (VERIFICAÇÃO EM TEMPO REAL)
         ========================================================= */}
-        <section id="sec-services" className="bg-white border border-[#E2E8E4] rounded-3xl p-6 shadow-xs space-y-4 scroll-mt-4">
+        <section id="sec-services" className="bg-white border border-[#E2E8E4] rounded-2xl md:rounded-3xl p-3.5 sm:p-5 md:p-6 shadow-xs space-y-4 scroll-mt-4">
           <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#E2E8E4]">
             <div className="flex items-center gap-3">
               <div className="p-2.5 rounded-2xl bg-[#EFF5F1] text-[#16422B]">

@@ -895,7 +895,7 @@ export function EvolutionCenterView({ user }) {
   };
 
   return (
-    <div className="h-full w-full overflow-y-auto bg-[#F8FAF9] p-4 md:p-6 space-y-5">
+    <div className="h-full w-full overflow-y-auto bg-[#F8FAF9] p-2 sm:p-4 md:p-6 pb-6 md:pb-6 space-y-4 md:space-y-5">
       {/* Toast de Feedback */}
       {toast && (
         <div className="fixed bottom-20 md:bottom-6 right-6 z-50 bg-[#16422B] text-white px-4 py-3 rounded-2xl shadow-xl border border-emerald-700 flex items-center gap-2.5 text-xs font-bold animate-bounce">

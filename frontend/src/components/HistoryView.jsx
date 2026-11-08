@@ -204,7 +204,7 @@ export function HistoryView({ user }) {
   );
 
   return (
-    <div className="max-w-5xl mx-auto h-full p-3 md:p-4 pb-24 md:pb-6 flex flex-col">
+    <div className="w-full max-w-5xl mx-auto h-full p-2 sm:p-3 md:p-4 pb-2 md:pb-4 flex flex-col overflow-hidden">
       {/* Header do Histórico com Identificação de Nível */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="min-w-0">
@@ -290,7 +290,7 @@ export function HistoryView({ user }) {
       )}
 
       {/* Lista de Tarefas ou Indicador de Carregamento */}
-      <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-0.5 md:pr-1 pb-6 md:pb-4">
         {loading ? (
           <div className="space-y-3 animate-in fade-in">
             <div className="bg-white border border-[#E2E8E4] rounded-2xl p-6 flex flex-col items-center justify-center text-center gap-3 shadow-xs">
