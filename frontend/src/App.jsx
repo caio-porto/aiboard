@@ -16,8 +16,18 @@ import {
   Sparkles,
   ShieldAlert,
   Crown,
-  UserCheck
+  UserCheck,
+  Smartphone,
+  Download,
+  Share2,
+  X
 } from 'lucide-react';
+import {
+  subscribeInstallPrompt,
+  promptInstallApp,
+  isStandaloneApp,
+  isIOSDevice
+} from './utils/notifications';
 
 function AppContent({ user, setUser, companyConfig }) {
   const { t } = useLanguage();
@@ -26,6 +36,26 @@ function AppContent({ user, setUser, companyConfig }) {
   const [loginLoading, setLoginLoading] = useState(false);
   const [devEmail, setDevEmail] = useState('');
   const [devName, setDevName] = useState('');
+  const [canInstall, setCanInstall] = useState(false);
+  const [showIosModal, setShowIosModal] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+
+  useEffect(() => {
+    setIsStandalone(isStandaloneApp());
+    const unsub = subscribeInstallPrompt(setCanInstall);
+    return unsub;
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (isIOSDevice() && !isStandaloneApp()) {
+      setShowIosModal(true);
+      return;
+    }
+    const accepted = await promptInstallApp();
+    if (accepted) {
+      setCanInstall(false);
+    }
+  };
 
   const companyName = companyConfig?.company_name || 'AI Board';
   const googleClientId =
@@ -327,7 +357,19 @@ function AppContent({ user, setUser, companyConfig }) {
         </div>
 
         {/* User Profile, Language Selector & Logout */}
-        <div className="flex items-center gap-2 md:gap-3 shrink-0">
+        <div className="flex items-center gap-1.5 md:gap-2.5 shrink-0">
+          {/* Botão de Instalar no Celular / PWA */}
+          {!isStandalone && (canInstall || isIOSDevice()) && (
+            <button
+              onClick={handleInstallClick}
+              title={t('chat.installAppDesc')}
+              className="flex items-center gap-1.5 px-2 md:px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-[#16422B] border border-emerald-300 text-xs font-bold transition shadow-2xs cursor-pointer whitespace-nowrap"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+              <span className="hidden sm:inline">{t('chat.installAppMobile')}</span>
+            </button>
+          )}
+
           <LanguageSelector />
 
           <div className="text-right hidden sm:block min-w-0 max-w-[200px] lg:max-w-[240px]">
@@ -421,6 +463,53 @@ function AppContent({ user, setUser, companyConfig }) {
           <span className="truncate">{t('nav.statusShort')}</span>
         </button>
       </nav>
+
+      {/* Modal Instrucional PWA para iOS (Safari) */}
+      {showIosModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-gray-100 relative">
+            <button
+              onClick={() => setShowIosModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-[#16422B] p-2 flex items-center justify-center shadow-md">
+              <img src="/favicon.svg" alt="AI Board" className="w-10 h-10 object-contain" />
+            </div>
+
+            <h3 className="text-center font-extrabold text-[#16422B] text-base mb-1">
+              {t('chat.installAppMobile')}
+            </h3>
+            <p className="text-center text-xs text-gray-600 mb-5 leading-relaxed">
+              {t('chat.installAppDesc')}
+            </p>
+
+            <div className="space-y-3 bg-[#EFF5F1] rounded-2xl p-4 text-xs text-[#16422B] font-medium border border-[#E2E8E4]">
+              <div className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-[#16422B] text-white text-[11px] font-bold flex items-center justify-center shrink-0">1</span>
+                <span>Toque no botão <strong>Compartilhar</strong> (<Share2 className="w-3.5 h-3.5 inline mx-0.5" />) na barra do Safari.</span>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-[#16422B] text-white text-[11px] font-bold flex items-center justify-center shrink-0">2</span>
+                <span>Role para baixo e selecione <strong>Adicionar à Tela de Início</strong>.</span>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-[#16422B] text-white text-[11px] font-bold flex items-center justify-center shrink-0">3</span>
+                <span>Toque em <strong>Adicionar</strong> para concluir a instalação!</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowIosModal(false)}
+              className="w-full mt-5 py-3 rounded-2xl bg-[#16422B] text-white font-bold text-xs hover:bg-[#2B6143] transition cursor-pointer shadow-sm"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

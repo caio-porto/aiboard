@@ -107,7 +107,15 @@ export const TRANSLATIONS = {
       startCleanChat: 'Start a new clean conversation',
       taskFailed: 'Task failed: {error}',
       untitledConversation: 'Untitled Conversation',
-      welcome: 'Hello! I am your **Executive Orchestrator**. Ask any operational, financial, or strategic question and I will coordinate our specialist agents and MCP tools to deliver a complete answer.'
+      welcome: 'Hello! I am your **Executive Orchestrator**. Ask any operational, financial, or strategic question and I will coordinate our specialist agents and MCP tools to deliver a complete answer.',
+      enableNotifications: 'Enable Mobile Notifications',
+      enableNotificationsPrompt: 'Notify me on mobile when the agent finishes answering',
+      notificationsActive: 'Mobile Notifications Active',
+      notificationsBlocked: 'Notifications Blocked in Browser',
+      agentResponded: 'Agent Responded',
+      installApp: 'Install App',
+      installAppMobile: 'Install on Phone',
+      installAppDesc: 'Install AI Board on your phone for quick access and instant notifications.'
     },
     studio: {
       headerDesktop: 'Agents & MCP Connections',
@@ -654,7 +662,15 @@ export const TRANSLATIONS = {
       startCleanChat: 'Iniciar nova conversa limpa',
       taskFailed: 'Falha na tarefa: {error}',
       untitledConversation: 'Conversa sem título',
-      welcome: 'Olá! Sou o seu **Orquestrador Executivo**. Faça qualquer pergunta operacional, financeira ou estratégica e coordenarei nossos agentes especialistas e ferramentas MCP para entregar uma resposta completa.'
+      welcome: 'Olá! Sou o seu **Orquestrador Executivo**. Faça qualquer pergunta operacional, financeira ou estratégica e coordenarei nossos agentes especialistas e ferramentas MCP para entregar uma resposta completa.',
+      enableNotifications: 'Ativar Notificações no Celular',
+      enableNotificationsPrompt: 'Avisar no celular quando o agente responder',
+      notificationsActive: 'Notificações Ativas no Celular',
+      notificationsBlocked: 'Notificações Bloqueadas no Navegador',
+      agentResponded: 'Agente Respondeu',
+      installApp: 'Instalar Aplicativo',
+      installAppMobile: 'Instalar no Celular',
+      installAppDesc: 'Instale o AI Board no seu celular para acesso rápido e notificações nativas.'
     },
     studio: {
       headerDesktop: 'Agentes & Conexões MCP',
@@ -1201,7 +1217,15 @@ export const TRANSLATIONS = {
       startCleanChat: 'Iniciar nueva conversación limpia',
       taskFailed: 'Error en la tarea: {error}',
       untitledConversation: 'Conversación sin título',
-      welcome: '¡Hola! Soy su **Orquestador Ejecutivo**. Haga cualquier pregunta operativa, financiera o estratégica y coordinaré a nuestros agentes especialistas y herramientas MCP para entregar una respuesta completa.'
+      welcome: '¡Hola! Soy su **Orquestador Ejecutivo**. Haga cualquier pregunta operativa, financiera o estratégica y coordinaré a nuestros agentes especialistas y herramientas MCP para entregar una respuesta completa.',
+      enableNotifications: 'Activar Notificaciones en el Móvil',
+      enableNotificationsPrompt: 'Avisar en el móvil cuando el agente responda',
+      notificationsActive: 'Notificaciones Activas en el Móvil',
+      notificationsBlocked: 'Notificaciones Bloqueadas en el Navegador',
+      agentResponded: 'El Agente Respondió',
+      installApp: 'Instalar Aplicación',
+      installAppMobile: 'Instalar en el Móvil',
+      installAppDesc: 'Instala AI Board en tu móvil para acceso rápido y notificaciones nativas.'
     },
     studio: {
       headerDesktop: 'Agentes y Conexiones MCP',

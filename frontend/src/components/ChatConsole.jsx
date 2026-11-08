@@ -15,10 +15,19 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   History,
-  CornerDownLeft
+  CornerDownLeft,
+  Bell,
+  BellRing,
+  BellOff,
+  Smartphone
 } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { useLanguage } from '../i18n';
+import {
+  notifyAgentResponse,
+  getNotificationPermission,
+  requestNotificationPermission
+} from '../utils/notifications';
 
 export function ChatConsole({ user }) {
   const { t, tr } = useLanguage();
@@ -75,6 +84,27 @@ export function ChatConsole({ user }) {
   const [activeTask, setActiveTask] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [notifPermission, setNotifPermission] = useState(() => getNotificationPermission());
+  const [showNotifPromptBanner, setShowNotifPromptBanner] = useState(false);
+
+  // Escuta cliques em notificações mobile do Service Worker para focar na sessão correta
+  useEffect(() => {
+    const handleOpenSession = (e) => {
+      const targetId = e.detail?.sessionId;
+      if (targetId) {
+        setCurrentSessionId(targetId);
+        if (window.innerWidth < 768) setIsSidebarOpen(false);
+      }
+    };
+    window.addEventListener('aiboard:open-session', handleOpenSession);
+    return () => window.removeEventListener('aiboard:open-session', handleOpenSession);
+  }, []);
+
+  const handleEnableNotifications = async () => {
+    const perm = await requestNotificationPermission();
+    setNotifPermission(perm);
+    setShowNotifPromptBanner(false);
+  };
 
   // Salva sessões no localStorage sempre que forem alteradas
   useEffect(() => {
@@ -178,6 +208,12 @@ export function ChatConsole({ user }) {
                       : s
                   )
                 );
+                notifyAgentResponse({
+                  title: `${activeSess.title && activeSess.title !== 'Nova Conversa' ? activeSess.title : 'AI Board'} • ${t('chat.agentResponded')}`,
+                  body: completedMsg.text,
+                  sessionId: currentSessionId,
+                  taskId: tId
+                });
                 setLoading(false);
                 setActiveTask(null);
                 return;
@@ -246,6 +282,14 @@ export function ChatConsole({ user }) {
             prev.map((s) => {
               if (s.id !== activeSess.id) return s;
               const alreadyHas = (s.messages || []).some((m) => m.id === `res-${pendingTask}`);
+              if (!alreadyHas) {
+                notifyAgentResponse({
+                  title: `${activeSess.title && activeSess.title !== 'Nova Conversa' ? activeSess.title : 'AI Board'} • ${t('chat.agentResponded')}`,
+                  body: completedMsg.text,
+                  sessionId: activeSess.id,
+                  taskId: pendingTask
+                });
+              }
               return {
                 ...s,
                 pendingTaskId: null,
@@ -270,6 +314,14 @@ export function ChatConsole({ user }) {
             prev.map((s) => {
               if (s.id !== activeSess.id) return s;
               const alreadyHas = (s.messages || []).some((m) => m.id === `err-${pendingTask}`);
+              if (!alreadyHas) {
+                notifyAgentResponse({
+                  title: `${activeSess.title && activeSess.title !== 'Nova Conversa' ? activeSess.title : 'AI Board'} • ${t('chat.agentResponded')}`,
+                  body: failMsg.text,
+                  sessionId: activeSess.id,
+                  taskId: pendingTask
+                });
+              }
               return {
                 ...s,
                 pendingTaskId: null,
@@ -330,6 +382,9 @@ export function ChatConsole({ user }) {
 
     setPrompt('');
     setLoading(true);
+    if (notifPermission === 'default') {
+      setShowNotifPromptBanner(true);
+    }
 
     try {
       const res = await fetch('/api/tasks', {
@@ -515,14 +570,50 @@ export function ChatConsole({ user }) {
             </div>
           </div>
 
-          <button
-            onClick={handleStartNewChat}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold bg-[#EFF5F1] text-[#16422B] hover:bg-[#E2E8E4] rounded-xl transition cursor-pointer shrink-0 whitespace-nowrap"
-            title={t('chat.startCleanChat')}
-          >
-            <Plus className="w-3.5 h-3.5 shrink-0" />
-            <span className="hidden sm:inline">{t('chat.newConversation')}</span>
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Botão de Notificação no Celular/Desktop */}
+            <button
+              onClick={handleEnableNotifications}
+              title={
+                notifPermission === 'granted'
+                  ? t('chat.notificationsActive')
+                  : notifPermission === 'denied'
+                  ? t('chat.notificationsBlocked')
+                  : t('chat.enableNotifications')
+              }
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-xl transition cursor-pointer shrink-0 whitespace-nowrap ${
+                notifPermission === 'granted'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                  : notifPermission === 'denied'
+                  ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
+                  : 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
+              }`}
+            >
+              {notifPermission === 'granted' ? (
+                <BellRing className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              ) : notifPermission === 'denied' ? (
+                <BellOff className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+              ) : (
+                <Bell className="w-3.5 h-3.5 text-amber-600 shrink-0 animate-bounce" />
+              )}
+              <span className="hidden sm:inline">
+                {notifPermission === 'granted'
+                  ? t('chat.notificationsActive')
+                  : notifPermission === 'denied'
+                  ? t('chat.notificationsBlocked')
+                  : t('chat.enableNotifications')}
+              </span>
+            </button>
+
+            <button
+              onClick={handleStartNewChat}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold bg-[#EFF5F1] text-[#16422B] hover:bg-[#E2E8E4] rounded-xl transition cursor-pointer shrink-0 whitespace-nowrap"
+              title={t('chat.startCleanChat')}
+            >
+              <Plus className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">{t('chat.newConversation')}</span>
+            </button>
+          </div>
         </div>
 
         {/* Área de Mensagens com scroll interno independente */}
@@ -597,6 +688,36 @@ export function ChatConsole({ user }) {
             </div>
           )}
         </div>
+
+        {/* Banner convidando a ativar notificações móveis */}
+        {showNotifPromptBanner && notifPermission === 'default' && (
+          <div className="mt-2 bg-gradient-to-r from-emerald-50 to-[#EFF5F1] border border-emerald-200 rounded-2xl p-2.5 px-3.5 flex items-center justify-between gap-3 text-xs text-[#16422B] shadow-2xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="p-1.5 rounded-xl bg-emerald-600 text-white shrink-0">
+                <Bell className="w-3.5 h-3.5" />
+              </span>
+              <span className="font-semibold truncate">
+                {t('chat.enableNotificationsPrompt')}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleEnableNotifications}
+                className="px-2.5 py-1 rounded-xl bg-[#16422B] hover:bg-[#2B6143] text-white font-bold text-[11px] transition cursor-pointer shadow-2xs"
+              >
+                {t('chat.enableNotifications')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowNotifPromptBanner(false)}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Caixa de Entrada de Prompt (Sempre visível acima da barra de navegação) */}
         <form
