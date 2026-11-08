@@ -2011,87 +2011,13 @@ def _worker_execute_task(task_id: str, crew_name: str, prompt: str, telegram_cha
                     except Exception:
                         active_topo = topology_snapshot
 
-            # 5. Malha de Segurança & Resiliência (`llm_auto_fallback_enabled` + `max_retry_attempts` + Auto-Reparo de Módulos)
+            # 5. Malha de Segurança & Resiliência (`llm_auto_fallback_enabled` + `max_retry_attempts`)
             fallback_on = str(get_setting("llm_auto_fallback_enabled", "false")).lower() in ("true", "1", "yes")
             try:
-                max_attempts = int(get_setting("max_retry_attempts") or (3 if fallback_on else 2))
+                max_attempts = int(get_setting("max_retry_attempts") or (3 if fallback_on else 1))
             except Exception:
-                max_attempts = 3 if fallback_on else 2
-            max_attempts = max(2, min(max_attempts, 4))
-
-            def _attempt_runtime_self_heal(err_obj: Exception) -> bool:
-                """Auto-repara em tempo real falhas de ModuleNotFoundError (ponte tools <-> custom_tools ou pacotes pip)."""
-                err_txt = str(err_obj or "")
-                if not isinstance(err_obj, (ModuleNotFoundError, ImportError)) and "No module named" not in err_txt:
-                    return False
-                import re as _re_mod
-                import sys as _sys_mod
-                import importlib as _il_mod
-                import subprocess as _sp_mod
-                m_mod = _re_mod.search(r"No module named ['\"]([^'\"]+)['\"]", err_txt)
-                if not m_mod:
-                    return False
-                missing_name = m_mod.group(1).strip()
-
-                # Caso A: Ponte automática entre tools.<submod> e custom_tools.<submod>
-                if missing_name.startswith("tools.") or missing_name.startswith("custom_tools."):
-                    parts = missing_name.split(".", 1)
-                    alt_pkg = "custom_tools" if parts[0] == "tools" else "tools"
-                    alt_name = f"{alt_pkg}.{parts[1]}"
-                    try:
-                        import tools as _t_pkg
-                        _ct_dir = os.path.abspath(os.path.join(os.path.dirname(_t_pkg.__file__), "..", "custom_tools"))
-                        if os.path.isdir(_ct_dir) and _ct_dir not in _t_pkg.__path__:
-                            _t_pkg.__path__.append(_ct_dir)
-                        _il_mod.invalidate_caches()
-                        mod_loaded = _il_mod.import_module(alt_name)
-                        _sys_mod.modules[missing_name] = mod_loaded
-                        log_task_event(
-                            task_id,
-                            f"🔧 [Auto-Reparo Antigravity] Módulo '{missing_name}' redirecionado automaticamente para '{alt_name}'. Retomando execução...",
-                            level="INFO",
-                            agent_name="Motor de Auto-Reparo"
-                        )
-                        return True
-                    except Exception as bridge_err:
-                        logger.warning(f"Falha ao redirecionar módulo {missing_name} -> {alt_name}: {bridge_err}")
-
-                # Caso B: Instalação automática de dependências Python de runtime ausentes no container
-                base_mod = missing_name.split(".")[0].lower()
-                pip_map = {
-                    "playwright": "playwright>=1.40.0",
-                    "pymysql": "pymysql>=1.1.0",
-                    "psycopg2": "psycopg2-binary>=2.9.9",
-                    "openpyxl": "openpyxl>=3.1.0",
-                    "bs4": "beautifulsoup4>=4.12.0",
-                }
-                if base_mod in pip_map:
-                    pkg_spec = pip_map[base_mod]
-                    log_task_event(
-                        task_id,
-                        f"🔧 [Auto-Reparo Antigravity] Dependência '{base_mod}' ausente. Instalando '{pkg_spec}' automaticamente...",
-                        level="INFO",
-                        agent_name="Motor de Auto-Reparo"
-                    )
-                    try:
-                        _sp_mod.run(
-                            [_sys_mod.executable, "-m", "pip", "install", "--quiet", pkg_spec],
-                            capture_output=True,
-                            text=True,
-                            timeout=90,
-                        )
-                        if base_mod == "playwright":
-                            _sp_mod.run(
-                                [_sys_mod.executable, "-m", "playwright", "install", "chromium"],
-                                capture_output=True,
-                                text=True,
-                                timeout=120,
-                            )
-                        _il_mod.invalidate_caches()
-                        return True
-                    except Exception as pip_err:
-                        logger.warning(f"Falha ao auto-instalar pacote {pkg_spec}: {pip_err}")
-                return False
+                max_attempts = 3 if fallback_on else 1
+            max_attempts = max(1, min(max_attempts, 4))
 
             last_err = None
             res_out = None
@@ -2109,19 +2035,17 @@ def _worker_execute_task(task_id: str, crew_name: str, prompt: str, telegram_cha
                     break
                 except Exception as crew_err:
                     last_err = crew_err
-                    healed_now = _attempt_runtime_self_heal(crew_err) if attempt < max_attempts else False
-                    if attempt < max_attempts and (healed_now or fallback_on):
-                        backoff_sec = 1 if healed_now else (2 * attempt)
-                        if not healed_now:
-                            log_task_event(
-                                task_id,
-                                f"🛡️ [Malha de Resiliência Antigravity] Tentativa {attempt}/{max_attempts} falhou ({str(crew_err)[:120]}). Acionando retry com fallback em {backoff_sec}s...",
-                                level="WARNING",
-                                agent_name="Guardrail de Resiliência"
-                            )
+                    if attempt < max_attempts and fallback_on:
+                        backoff_sec = 2 * attempt
+                        log_task_event(
+                            task_id,
+                            f"🛡️ [Malha de Resiliência Antigravity] Tentativa {attempt}/{max_attempts} falhou ({str(crew_err)[:120]}). Acionando retry com fallback em {backoff_sec}s...",
+                            level="WARNING",
+                            agent_name="Guardrail de Resiliência"
+                        )
                         time.sleep(backoff_sec)
-                        # Na retentativa por erro de LLM, força fallback de modelo leve para evitar 429/503
-                        if not healed_now and isinstance(active_topo, dict):
+                        # Na retentativa, força fallback de modelo leve para evitar 429/503
+                        if isinstance(active_topo, dict):
                             try:
                                 active_topo = json.loads(json.dumps(active_topo))
                                 for node in active_topo.get("nodes", []):
@@ -2267,38 +2191,61 @@ def _worker_execute_task(task_id: str, crew_name: str, prompt: str, telegram_cha
                 logger.warning(f"Erro ao sincronizar trava mensal JV Rio pós-tarefa {task_id}: {jv_err}")
 
     except Exception as e:
+        import traceback as _tb_mod
+        tb_str = _tb_mod.format_exc()
         logger.exception(f"Erro na execução da tarefa {task_id}: {e}")
         err_msg = str(e)
         if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
             err_msg = "⚠️ Limite de cota diária do Google Gemini atingido na chave atual (Free Tier 20 req/dia). Para continuar executando, configure uma chave ativa em 'Config & Status'."
         elif "404" in err_msg and "not found" in err_msg.lower():
             err_msg = f"⚠️ O modelo selecionado não foi encontrado ou está descontinuado na API do Gemini. Detalhe: {err_msg[:200]}"
-            
+
+        # Inicia automaticamente a análise do erro e gera explicação + proposta de solução para aprovação no Centro de Evolução
+        evo_proposal_id = None
+        try:
+            from api.evolution_agent import analyze_task_error_and_propose_solution
+            evo_proposal_id = analyze_task_error_and_propose_solution(
+                task_id=task_id,
+                prompt=prompt,
+                error_msg=err_msg,
+                traceback_str=tb_str,
+            )
+        except Exception as evo_err:
+            logger.warning(f"Aviso ao gerar análise automática de erro no Centro de Evolução para {task_id}: {evo_err}")
+
+        if evo_proposal_id:
+            err_msg_with_evo = (
+                f"{err_msg}\n\n"
+                f"🔍 [Centro de Evolução]: O sistema iniciou automaticamente a análise deste erro e enviou a explicação da causa-raiz + proposta de solução para sua aprovação no Centro de Evolução (Proposta #{evo_proposal_id})."
+            )
+        else:
+            err_msg_with_evo = err_msg
+
         completed_at = time.time()
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("""
                 UPDATE agent_tasks 
                 SET status = 'FAILED', error = ?, completed_at = ? 
                 WHERE task_id = ?
-            """, (err_msg, completed_at, task_id))
+            """, (err_msg_with_evo, completed_at, task_id))
             conn.commit()
 
         log_task_event(task_id, f"❌ Erro na execução: {err_msg}", level="ERROR")
+        if evo_proposal_id:
+            log_task_event(
+                task_id,
+                f"🔍 [Meta-Agente Antigravity] Análise de causa-raiz concluída. Explicação e solução aguardando aprovação no Centro de Evolução (Proposta #{evo_proposal_id}).",
+                level="WARNING",
+                agent_name="Meta-Agente Antigravity"
+            )
 
         # Dispara alerta imediato para o Telegram em QUALQUER falha de agente
         send_system_telegram_alert(
             title=f"Falha na Tarefa {task_id} ({crew_name.upper()})",
-            details=f"Prompt: {prompt[:180]}\n\nErro: {err_msg}",
+            details=f"Prompt: {prompt[:180]}\n\nErro: {err_msg_with_evo}",
             severity="ERROR",
             source=f"agent_task:{task_id}"
         )
-
-        # Aciona imediatamente o Meta-Agente Antigravity em background para diagnóstico e auto-reparo
-        try:
-            from api.evolution_agent import trigger_reactive_self_healing_async
-            trigger_reactive_self_healing_async(task_id, err_msg)
-        except Exception as evo_trig_err:
-            logger.debug(f"Aviso ao acionar auto-reparo reativo pós-falha: {evo_trig_err}")
     finally:
         unlock_execution_mutex()
 

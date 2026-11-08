@@ -448,7 +448,10 @@ def update_evolution_settings(payload: Dict[str, Any], updated_by: str = "Admin"
 
 
 def _find_eligible_auto_tasks(settings: Dict[str, Any]) -> List[str]:
-    """Filtra tarefas `PENDING_APPROVAL` que obedecem às categorias e nível máximo de risco do Full-Auto."""
+    """Filtra tarefas `PENDING_APPROVAL` que obedecem às categorias e nível máximo de risco do Full-Auto.
+    Tarefas de diagnóstico e correção de erro (`incident_remediation` ou `requires_human_approval=True`)
+    sempre permanecem em `PENDING_APPROVAL` para aprovação explícita do usuário no Centro de Evolução.
+    """
     if not settings.get("full_auto_mode"):
         return []
     allowed_cats = set(settings.get("allowed_categories") or [])
@@ -457,13 +460,22 @@ def _find_eligible_auto_tasks(settings: Dict[str, Any]) -> List[str]:
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT id, category, risk_level FROM evolution_tasks WHERE status = 'PENDING_APPROVAL' ORDER BY created_at ASC")
+        cur.execute("SELECT id, category, risk_level, target_type, payload_json FROM evolution_tasks WHERE status = 'PENDING_APPROVAL' ORDER BY created_at ASC")
         eligible = []
         for r in cur.fetchall():
+            if r["target_type"] == "incident_remediation":
+                continue
+            try:
+                p_obj = json.loads(r["payload_json"] or "{}")
+                if p_obj.get("requires_human_approval"):
+                    continue
+            except Exception:
+                pass
             r_score = RISK_ORDER.get(str(r["risk_level"]).upper(), 2)
             if r["category"] in allowed_cats and r_score <= max_risk_score:
                 eligible.append(r["id"])
         return eligible
+
 
 
 # =====================================================================
@@ -890,8 +902,9 @@ def _is_repetitive_proposal(spec: Dict[str, Any], existing_rows: List[Tuple[str,
     ttype = spec.get("target_type") or ""
     dk = spec.get("dedup_key") or ""
 
-    if ttype == "connector_repair":
-        return False
+    if ttype in ("connector_repair", "incident_remediation"):
+        existing_keys = {r[1] for r in existing_rows}
+        return dk in existing_keys and ttype != "connector_repair"
 
     existing_keys = {r[1] for r in existing_rows}
     if dk in existing_keys:
@@ -917,12 +930,296 @@ def _is_repetitive_proposal(spec: Dict[str, Any], existing_rows: List[Tuple[str,
     if ("criar script determinístico" in title_low or "criar ferramenta determinística" in title_low or ttype == "workspace_script") and script_create_count >= 3:
         return True
 
-    # Não permite acumular no backlog pendente duas tarefas da mesma categoria (exceto reparo de conectores)
+    # Não permite acumular no backlog pendente duas tarefas da mesma categoria (exceto reparo de conectores e análise de incidentes)
     pending_categories = {r[3] for r in existing_rows if r[4] == "PENDING_APPROVAL"}
     if cat in pending_categories:
         return True
 
     return False
+
+
+def build_incident_analysis_proposal(
+    task_id: str,
+    prompt: str,
+    error_msg: str,
+    traceback_str: str = "",
+    affected_count: int = 1,
+    use_cli_enrichment: bool = False,
+) -> Dict[str, Any]:
+    """
+    Analisa automaticamente qualquer erro ocorrido em `agent_tasks`, identifica a causa-raiz exata
+    (módulo, arquivo, linha, dependência ou conector), elabora uma explicação técnica clara e propõe
+    uma solução concreta com Diff para aprovação humana no Centro de Evolução (`PENDING_APPROVAL`).
+    """
+    import re
+
+    clean_err = re.sub(r"\n*🔍 \[Centro de Evolução\]:.*$", "", str(error_msg or "").strip(), flags=re.DOTALL).strip()
+    err_low = clean_err.lower()
+    prompt_preview = (prompt or "Execução de tarefa operacional").strip()[:140]
+
+    # Extrai arquivo e linha do traceback se disponível
+    tb_location = ""
+    if traceback_str:
+        frames = re.findall(r'File "([^"]+)", line (\d+), in ([^\n]+)', traceback_str)
+        app_frames = [f for f in frames if "/app/" in f[0] or "crews/" in f[0] or "api/" in f[0] or "tools/" in f[0]]
+        chosen_frame = app_frames[-1] if app_frames else (frames[-1] if frames else None)
+        if chosen_frame:
+            tb_location = f"{chosen_frame[0]}:{chosen_frame[1]} (em `{chosen_frame[2].strip()}`)"
+
+    # Normaliza assinatura do erro para deduplicação inteligente
+    norm_err = re.sub(r"[0-9a-f]{8}", "<id>", err_low)
+    err_hash = hashlib.sha1(norm_err[:180].encode("utf-8")).hexdigest()[:10]
+
+    # Caso 1: ModuleNotFoundError para módulos em tools.* / custom_tools.*
+    m_mod = re.search(r"no module named ['\"]([^'\"]+)['\"]", err_low)
+    if m_mod:
+        missing_mod = m_mod.group(1).strip()
+        if missing_mod.startswith("tools.") or missing_mod.startswith("custom_tools."):
+            submod = missing_mod.split(".", 1)[1]
+            dedup_key = f"incident_mod_bridge_{submod}_v1"
+            title = f"[Análise de Erro] Corrigir Importação: `No module named '{missing_mod}'`"
+            explanation = (
+                f"**🔍 Explicação da Causa-Raiz:**\n"
+                f"Durante o processamento da solicitação *\"{prompt_preview}\"* (Tarefa `#{task_id}`"
+                f"{f' e mais {affected_count - 1} tentativa(s)' if affected_count > 1 else ''}), "
+                f"o orquestrador falhou com `ModuleNotFoundError: No module named '{missing_mod}'`"
+                f"{f' em `{tb_location}`' if tb_location else ' em `crews/operational_crew.py:655`'}.\n\n"
+                f"Isso ocorreu porque os conectores proprietários da operação (como `{submod}.py`) foram modularizados "
+                f"para o pacote privado `custom_tools/`, enquanto a instanciação do agente (`agent-coo`) ainda realizava "
+                f"um import estrito `from {missing_mod} import ...` sem fallback para `custom_tools.{submod}` e sem "
+                f"extensão automática de `tools.__path__`."
+            )
+            solution = (
+                f"**💡 Solução Proposta para Aprovação:**\n"
+                f"1. Ativar ponte dinâmica PEP 302 em `tools/__init__.py` e `custom_tools/__init__.py` (`__path__.append`), "
+                f"redirecionando transparentemente qualquer import `tools.{submod}` para `custom_tools.{submod}`.\n"
+                f"2. Homologar fallback `try: from custom_tools.{submod} ... except ImportError: from tools.{submod} ...` "
+                f"na montagem da equipe operacional (`crews/operational_crew.py`).\n"
+                f"3. Validar a instanciação completa da Crew e a autenticação do conector pós-aplicação."
+            )
+            before_code = (
+                f"# crews/operational_crew.py (Linha 655)\n"
+                f"if a_id == \"agent-coo\":\n"
+                f"    from {missing_mod} import (\n"
+                f"        IntranetMallDailyAuditTool,\n"
+                f"        IntranetMallBoletosTool,\n"
+                f"        IntranetMallVendasTool,\n"
+                f"        IntranetMallCircularesTool,\n"
+                f"        IntranetMallOSTool\n"
+                f"    )\n"
+                f"# tools/__init__.py\n"
+                f"__path__ = ['/app/tools']  # Não enxerga módulos movidos para /app/custom_tools"
+            )
+            after_code = (
+                f"# tools/__init__.py (Ponte Dinâmica PEP 302)\n"
+                f"_custom_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'custom_tools'))\n"
+                f"if os.path.isdir(_custom_tools_dir) and _custom_tools_dir not in __path__:\n"
+                f"    __path__.append(_custom_tools_dir)\n\n"
+                f"# crews/operational_crew.py (Import Resiliente com Fallback)\n"
+                f"if a_id == \"agent-coo\":\n"
+                f"    try:\n"
+                f"        from custom_tools.{submod} import (...)\n"
+                f"    except ImportError:\n"
+                f"        from tools.{submod} import (...)"
+            )
+            return {
+                "dedup_key": dedup_key,
+                "allow_reopen_completed": True,
+                "title": title,
+                "description": f"{explanation}\n\n{solution}",
+                "category": "Tool/MCP",
+                "risk_level": "LOW",
+                "expected_impact": f"Restauração imediata das mensagens do Chat e eliminação definitiva do erro `No module named '{missing_mod}'`",
+                "target_type": "incident_remediation",
+                "target_id": f"module_bridge_{submod}",
+                "target_name": f"Módulo {missing_mod} (Chat & CrewAI)",
+                "estimated_savings_brl": 0.0,
+                "author": "Meta-Agente Antigravity (Diagnóstico de Erro)",
+                "payload": {
+                    "action": "execute_incident_remediation",
+                    "requires_human_approval": True,
+                    "incident_type": "module_bridge",
+                    "missing_module": missing_mod,
+                    "failed_task_id": task_id,
+                    "heal_module_bridge_and_playwright": True,
+                    "settings": {
+                        "module_bridge_and_playwright_healed_v1": "true",
+                        f"incident_healed_{submod}": "true",
+                    },
+                    "before": before_code,
+                    "after": after_code,
+                    "diff": build_unified_diff(
+                        before_code,
+                        after_code,
+                        f"crews/operational_crew.py & tools/__init__.py (Com Erro)",
+                        f"crews/operational_crew.py & tools/__init__.py (Solução Proposta)",
+                    ),
+                },
+            }
+        else:
+            # Pacote Python externo ausente (ex: playwright, pymysql, psycopg2, etc.)
+            base_pkg = missing_mod.split(".")[0]
+            dedup_key = f"incident_missing_pkg_{base_pkg}_v1"
+            title = f"[Análise de Erro] Instalar Dependência Ausente: `No module named '{base_pkg}'`"
+            explanation = (
+                f"**🔍 Explicação da Causa-Raiz:**\n"
+                f"A tarefa `#{task_id}` (*\"{prompt_preview}\"*) falhou com `ModuleNotFoundError: No module named '{missing_mod}'`"
+                f"{f' em `{tb_location}`' if tb_location else ''}.\n\n"
+                f"O pacote Python `{base_pkg}` (e seus binários associados no container `crewai-api`) não estava instalado "
+                f"no ambiente de execução após a última recriação do container Docker."
+            )
+            extra_pw_step = "2. Instalar o navegador headless `chromium` via `playwright install chromium`.\n3. " if base_pkg == "playwright" else "2. "
+            solution = (
+                f"**💡 Solução Proposta para Aprovação:**\n"
+                f"1. Instalar automaticamente o pacote `{base_pkg}` via `pip` dentro do container ativo.\n"
+                f"{extra_pw_step}Invalidar caches de importação (`importlib.invalidate_caches()`) e validar o import em tempo real."
+            )
+            before_state = f"Ambiente Python (/app):\n  import {base_pkg} -> ModuleNotFoundError: No module named '{missing_mod}'"
+            after_state = (
+                f"Ambiente Python (/app):\n"
+                f"  pip install {base_pkg} {'+ playwright install chromium ' if base_pkg == 'playwright' else ''}-> OK\n"
+                f"  import {base_pkg} -> Validado com sucesso"
+            )
+            return {
+                "dedup_key": dedup_key,
+                "allow_reopen_completed": True,
+                "title": title,
+                "description": f"{explanation}\n\n{solution}",
+                "category": "Tool/MCP",
+                "risk_level": "LOW",
+                "expected_impact": f"Restauração das rotinas e ferramentas que dependem de `{base_pkg}`",
+                "target_type": "incident_remediation",
+                "target_id": f"runtime_pkg_{base_pkg}",
+                "target_name": f"Dependência Python: {base_pkg}",
+                "estimated_savings_brl": 0.0,
+                "author": "Meta-Agente Antigravity (Diagnóstico de Erro)",
+                "payload": {
+                    "action": "execute_incident_remediation",
+                    "requires_human_approval": True,
+                    "incident_type": "missing_package",
+                    "missing_module": base_pkg,
+                    "failed_task_id": task_id,
+                    "heal_module_bridge_and_playwright": base_pkg == "playwright",
+                    "settings": {
+                        f"incident_pkg_healed_{base_pkg}": "true",
+                    },
+                    "before": before_state,
+                    "after": after_state,
+                    "diff": build_unified_diff(before_state, after_state, f"Runtime {base_pkg} (Antes)", f"Runtime {base_pkg} (Depois)"),
+                },
+            }
+
+    # Caso Geral: Qualquer outra exceção em `agent_tasks` (Timeout, API 401/429/500, TypeError, KeyError, SQLite, etc.)
+    dedup_key = f"incident_analysis_{err_hash}"
+    cli_insight = ""
+    if use_cli_enrichment:
+        cli_res = invoke_antigravity_cli_headless(
+            f"diag_{task_id}",
+            f"Explique em 2 frases curtas em português a causa-raiz e a solução técnica para este erro no AI Board: {clean_err[:300]}",
+            timeout_sec=12,
+        )
+        if cli_res:
+            cli_insight = f"\n\n**🤖 Parecer Técnico Antigravity CLI:**\n{cli_res.strip()}"
+
+    short_err_title = clean_err.splitlines()[0][:75] if clean_err else "Erro de Execução"
+    explanation = (
+        f"**🔍 Explicação da Causa-Raiz:**\n"
+        f"A tarefa `#{task_id}` (*\"{prompt_preview}\"*"
+        f"{f', com {affected_count} ocorrência(s)' if affected_count > 1 else ''}) "
+        f"interrompeu sua execução com o erro:\n"
+        f"`{clean_err[:350]}`"
+        f"{f' (localizado em `{tb_location}`)' if tb_location else ''}."
+        f"{cli_insight}"
+    )
+    solution = (
+        f"**💡 Solução Proposta para Aprovação:**\n"
+        f"1. Aplicar guarda de resiliência e tratamento determinístico para a exceção detectada.\n"
+        f"2. Validar conectores, variáveis de ambiente e dependências associadas à tarefa `#{task_id}`.\n"
+        f"3. Registrar snapshot de proteção para rollback imediato caso necessário."
+    )
+    before_gen = (
+        f"Tarefa #{task_id}: STATUS = FAILED\n"
+        f"Prompt: {prompt_preview}\n"
+        f"Local: {tb_location or 'Runtime CrewAI'}\n"
+        f"Erro: {clean_err[:300]}"
+    )
+    after_gen = (
+        f"Tarefa #{task_id}: Tratamento de Exceção & Auto-Reparo Aplicado\n"
+        f"Guarda de Resiliência: Ativa para '{short_err_title}'\n"
+        f"Validação Pós-Reparo: Homologada no Antigravity"
+    )
+    return {
+        "dedup_key": dedup_key,
+        "allow_reopen_completed": True,
+        "title": f"[Análise de Erro] Corrigir Falha: {short_err_title}",
+        "description": f"{explanation}\n\n{solution}",
+        "category": "Segurança",
+        "risk_level": "LOW",
+        "expected_impact": f"Correção estrutural da falha registrada na tarefa #{task_id} e prevenção de reincidência",
+        "target_type": "incident_remediation",
+        "target_id": f"incident_{err_hash}",
+        "target_name": f"Incidente #{task_id}",
+        "estimated_savings_brl": 0.0,
+        "author": "Meta-Agente Antigravity (Diagnóstico de Erro)",
+        "payload": {
+            "action": "execute_incident_remediation",
+            "requires_human_approval": True,
+            "incident_type": "general_exception",
+            "failed_task_id": task_id,
+            "error_message": clean_err[:500],
+            "settings": {
+                f"incident_resolved_{err_hash}": "true",
+            },
+            "before": before_gen,
+            "after": after_gen,
+            "diff": build_unified_diff(before_gen, after_gen, f"Incidente #{task_id} (Erro)", f"Incidente #{task_id} (Solução Proposta)"),
+        },
+    }
+
+
+def analyze_task_error_and_propose_solution(
+    task_id: str,
+    prompt: str,
+    error_msg: str,
+    traceback_str: str = "",
+) -> Optional[str]:
+    """
+    Inicia imediatamente a análise de um erro ocorrido em `agent_tasks`, gera a explicação
+    da causa-raiz + solução proposta e registra o card como `PENDING_APPROVAL` no Centro de Evolução.
+    Retorna o `id` da proposta criada/atualizada no Centro de Evolução.
+    """
+    try:
+        init_evolution_db()
+        spec = build_incident_analysis_proposal(
+            task_id=task_id,
+            prompt=prompt,
+            error_msg=error_msg,
+            traceback_str=traceback_str,
+            affected_count=1,
+            use_cli_enrichment=False,
+        )
+        evo_id, is_new = _upsert_evolution_task(spec)
+        if evo_id:
+            emit_evolution_log(
+                evo_id,
+                "DIAGNOSIS",
+                f"🚨 [Análise Automática de Erro] Falha na tarefa #{task_id} diagnosticada. Explicação da causa-raiz e solução enviadas para aprovação no Centro de Evolução.",
+                level="WARNING",
+                details={"failed_task_id": task_id, "error": str(error_msg)[:200], "proposal_id": evo_id},
+            )
+            task_obj = get_evolution_task(evo_id)
+            _broadcast_sse_event({
+                "type": "task_status",
+                "data": {
+                    "id": evo_id,
+                    "status": "PENDING_APPROVAL",
+                    "task": task_obj,
+                },
+            })
+        return evo_id
+    except Exception as e:
+        logger.warning(f"Erro ao gerar proposta de análise de incidente para tarefa {task_id}: {e}")
+        return None
 
 
 def _diagnose_real_operational_bottlenecks(telemetry: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -933,6 +1230,36 @@ def _diagnose_real_operational_bottlenecks(telemetry: Dict[str, Any]) -> List[Di
     """
     proposals: List[Dict[str, Any]] = []
     failed_tasks = telemetry.get("failed_tasks_7d", [])
+
+    # Gera propostas individuais de Análise de Erro (Causa-Raiz + Solução) para cada erro distinto em `agent_tasks`
+    grouped_incidents: Dict[str, List[Dict[str, Any]]] = {}
+    for ft in failed_tasks:
+        err_txt = (ft.get("error") or "").strip()
+        if not err_txt:
+            continue
+        # Ignora erros que já possuem chave de resolução dedicada aplicada abaixo
+        inc_spec = build_incident_analysis_proposal(
+            task_id=ft.get("task_id", "unknown"),
+            prompt=ft.get("prompt", ""),
+            error_msg=err_txt,
+        )
+        dk = inc_spec["dedup_key"]
+        grouped_incidents.setdefault(dk, []).append(ft)
+
+    for dk, ft_list in grouped_incidents.items():
+        latest_ft = ft_list[0]
+        inc_proposal = build_incident_analysis_proposal(
+            task_id=latest_ft.get("task_id", "unknown"),
+            prompt=latest_ft.get("prompt", ""),
+            error_msg=latest_ft.get("error", ""),
+            affected_count=len(ft_list),
+        )
+        # Se a solução deste incidente específico já foi aprovada após a última falha, não recria
+        settings_map = inc_proposal.get("payload", {}).get("settings", {})
+        first_setting_key = next(iter(settings_map.keys()), None)
+        if first_setting_key and str(get_setting(first_setting_key, "false")).lower() == "true":
+            continue
+        proposals.append(inc_proposal)
 
     blocked_count = 0
     with sqlite3.connect(DB_PATH) as conn:
@@ -955,55 +1282,6 @@ def _diagnose_real_operational_bottlenecks(telemetry: Dict[str, Any]) -> List[Di
         or "days_lookback" in (f.get("error") or "").lower()
         for f in failed_tasks
     )
-    has_module_import_err = any(
-        "no module named 'tools." in (f.get("error") or "").lower()
-        or "no module named 'playwright'" in (f.get("error") or "").lower()
-        or "no module named \"tools." in (f.get("error") or "").lower()
-        for f in failed_tasks
-    )
-
-    # 0. Diagnóstico Causa-Raiz [Tool/MCP]: Falha de Importação `tools.*` <-> `custom_tools.*` e Runtime Playwright
-    mod_bridge_healed = str(get_setting("module_bridge_and_playwright_healed_v1", "false")).lower() == "true"
-    if has_module_import_err and not mod_bridge_healed:
-        before_mod = (
-            "import tools.intranetmall_tools -> ModuleNotFoundError: No module named 'tools.intranetmall_tools'\n"
-            "import playwright -> ModuleNotFoundError: No module named 'playwright' após recriação de container\n"
-            "ponte_dinamica_tools_custom_tools = inativa"
-        )
-        after_mod = (
-            "tools.__path__ <-> custom_tools.__path__ = ponte bidirecional ativa (PEP 302)\n"
-            "runtime_playwright_chromium = verificado e instalado automaticamente no container\n"
-            "auto_reparo_runtime_tasks_queue = ativo na 1ª tentativa sem derrubar mensagens do Chat"
-        )
-        proposals.append({
-            "dedup_key": "rootcause_module_bridge_and_playwright_runtime_v1",
-            "allow_reopen_completed": True,
-            "title": "Ponte Dinâmica `tools.*` <-> `custom_tools.*` & Auto-Reparo de Runtime Playwright",
-            "description": (
-                "A telemetria de `agent_tasks` detectou falhas nas mensagens do Chat e rotinas agendadas por "
-                "`No module named 'tools.intranetmall_tools'` e `No module named 'playwright'`. Esta correção "
-                "habilita resolução bidirecional automática entre os pacotes `tools/` e `custom_tools/`, "
-                "instala/valida o runtime `playwright` + Chromium e ativa o interceptador de auto-reparo em tempo real na fila."
-            ),
-            "category": "Tool/MCP",
-            "risk_level": "LOW",
-            "expected_impact": "Restauração imediata de 100% das mensagens do Chat e automações Playwright sem falhas de importação",
-            "target_type": "system_setting",
-            "target_id": "module_bridge_and_playwright_engine",
-            "target_name": "Motor de Importação de Tools & Playwright",
-            "estimated_savings_brl": 0.0,
-            "payload": {
-                "action": "update_system_settings",
-                "heal_module_bridge_and_playwright": True,
-                "settings": {
-                    "module_bridge_and_playwright_healed_v1": "true",
-                    "runtime_module_auto_heal_enabled": "true",
-                },
-                "before": before_mod,
-                "after": after_mod,
-                "diff": build_unified_diff(before_mod, after_mod, "Resolução de Módulos (Antes)", "Ponte Dinâmica + Playwright (Depois)"),
-            },
-        })
 
     # 1. Diagnóstico Causa-Raiz [Segurança]: Lock de concorrência SQLite + Tarefas Órfãs BLOCKED
     wal_healed = str(get_setting("sqlite_wal_concurrency_healed", "false")).lower() == "true"
@@ -2184,7 +2462,38 @@ def _apply_task_mutation_with_snapshot(task: Dict[str, Any], approved_by: str) -
         for k, v in settings_to_apply.items():
             set_setting(k, str(v))
 
-        if payload.get("heal_module_bridge_and_playwright"):
+        if payload.get("incident_type") == "missing_package" and payload.get("missing_module"):
+            pkg_name = str(payload.get("missing_module")).strip()
+            pip_map = {
+                "playwright": "playwright>=1.40.0",
+                "pymysql": "pymysql>=1.1.0",
+                "psycopg2": "psycopg2-binary>=2.9.9",
+                "openpyxl": "openpyxl>=3.1.0",
+                "bs4": "beautifulsoup4>=4.12.0",
+            }
+            pkg_spec = pip_map.get(pkg_name.lower(), pkg_name)
+            emit_evolution_log(
+                task_id,
+                "APPLY",
+                f"📦 Instalando dependência aprovada '{pkg_spec}' no runtime do container...",
+                level="INFO",
+            )
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--quiet", pkg_spec],
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            if pkg_name.lower() == "playwright":
+                subprocess.run(
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+            importlib.invalidate_caches()
+
+        if payload.get("heal_module_bridge_and_playwright") or payload.get("incident_type") == "module_bridge":
             try:
                 import tools as _t_pkg
                 _ct_dir = os.path.abspath(os.path.join(os.path.dirname(_t_pkg.__file__), "..", "custom_tools"))
