@@ -176,7 +176,7 @@ export function StatusView({ user }) {
   const isProgrammaticScroll = useRef(false);
   const scrollTimeoutRef = useRef(null);
   const isAdmin = user?.role === 'admin';
-  const currencyCode = (selectedCurrency || settings?.currency_code || (i18n.language === 'pt-BR' ? 'BRL' : 'USD')).toUpperCase();
+  const currencyCode = (selectedCurrency || settings?.currency_code || (lang === 'pt-BR' ? 'BRL' : 'USD')).toUpperCase();
   const currencySymbol = customCurrencySymbol || settings?.currency_symbol || (currencyCode === 'USD' ? '$' : (currencyCode === 'EUR' ? '€' : (currencyCode === 'GBP' ? '£' : 'R$')));
   const isUSD = currencyCode === 'USD';
 
@@ -1453,7 +1453,7 @@ export function StatusView({ user }) {
                 <div className="pt-2 border-t border-[#E2E8E4]/60 flex items-center justify-between text-[11px] text-[#5A6B61]">
                   <span>{t('status.recommendedRange')}</span>
                   <span className="font-semibold text-[#1A202C]">
-                    {isUSD ? '$ 0.50 to $ 1.50 / day' : (i18n.language === 'en' ? `${currencySymbol} 2.00 to ${currencySymbol} 5.00 / day` : `${currencySymbol} 2,00 a ${currencySymbol} 5,00 / dia`)}
+                    {isUSD ? '$ 0.50 to $ 1.50 / day' : (lang === 'en' ? `${currencySymbol} 2.00 to ${currencySymbol} 5.00 / day` : `${currencySymbol} 2,00 a ${currencySymbol} 5,00 / dia`)}
                   </span>
                 </div>
               </div>

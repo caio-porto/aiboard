@@ -432,6 +432,8 @@ export function LanguageProvider({ user, children }) {
   const contextValue = useMemo(
     () => ({
       lang,
+      language: lang,
+      i18n: { language: lang },
       setLang,
       t,
       tr,
