@@ -290,6 +290,20 @@ def init_db():
                 expires_at REAL NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_email TEXT NOT NULL,
+                endpoint TEXT UNIQUE NOT NULL,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                device_type TEXT DEFAULT 'mobile',
+                user_agent TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_web_push_user ON web_push_subscriptions(user_email)")
 
         now = time.time()
         # Limpa automaticamente tarefas órfãs e destrava mutex causados por reinicializações do servidor
@@ -1307,6 +1321,275 @@ def get_active_approver_chat_ids() -> List[str]:
     return list(chat_ids)
 
 
+# =====================================================================
+# NOTIFICAÇÕES MOBILE MULTI-DISPOSITIVO (TELEGRAM + WEB PUSH VAPID RFC 8291/8292)
+# =====================================================================
+def _b64url_encode(data: bytes) -> str:
+    import base64
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(s: str) -> bytes:
+    import base64
+    pad = "=" * ((4 - len(s) % 4) % 4)
+    return base64.urlsafe_b64decode(s + pad)
+
+
+def get_or_create_vapid_keys() -> Dict[str, str]:
+    """Gera ou recupera par de chaves VAPID P-256 (ECDSA/ECDH) persistido no banco."""
+    pub = get_setting("vapid_public_key", "")
+    priv = get_setting("vapid_private_key", "")
+    if pub and priv:
+        return {"public_key": pub, "private_key": priv}
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        priv_val = private_key.private_numbers().private_value
+        priv_bytes = priv_val.to_bytes(32, "big")
+        pub_bytes = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint,
+        )
+        pub_b64 = _b64url_encode(pub_bytes)
+        priv_b64 = _b64url_encode(priv_bytes)
+        set_setting("vapid_public_key", pub_b64)
+        set_setting("vapid_private_key", priv_b64)
+        return {"public_key": pub_b64, "private_key": priv_b64}
+    except Exception as e:
+        logger.warning(f"Erro ao gerar chaves VAPID: {e}")
+        return {"public_key": "", "private_key": ""}
+
+
+def is_mobile_chat_notify_enabled(user_email: Optional[str] = None) -> bool:
+    """Verifica se o usuário ativou o recebimento de notificações no celular para respostas do Chat Operacional."""
+    clean_email = (user_email or "").strip().lower()
+    if clean_email:
+        val = get_setting(f"mobile_chat_notify:{clean_email}", "")
+        if val != "":
+            return str(val).lower() in ("true", "1", "yes", "active")
+    global_val = get_setting("mobile_chat_notify:global", "false")
+    return str(global_val).lower() in ("true", "1", "yes", "active")
+
+
+def set_mobile_chat_notify_enabled(user_email: Optional[str], enabled: bool) -> bool:
+    """Ativa ou desativa notificações no celular para respostas do Chat Operacional."""
+    clean_email = (user_email or "").strip().lower()
+    str_val = "true" if enabled else "false"
+    if clean_email:
+        set_setting(f"mobile_chat_notify:{clean_email}", str_val)
+    set_setting("mobile_chat_notify:global", str_val)
+    return enabled
+
+
+def save_web_push_subscription(
+    user_email: str,
+    subscription: Dict[str, Any],
+    device_type: str = "mobile",
+    user_agent: str = "",
+) -> bool:
+    """Registra uma assinatura Web Push (Service Worker PushManager) vinculada ao e-mail do usuário."""
+    endpoint = (subscription or {}).get("endpoint") or ""
+    keys = (subscription or {}).get("keys") or {}
+    p256dh = keys.get("p256dh") or ""
+    auth = keys.get("auth") or ""
+    if not endpoint or not p256dh or not auth:
+        return False
+    now = time.time()
+    clean_email = (user_email or "admin@localhost").strip().lower()
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                INSERT INTO web_push_subscriptions (user_email, endpoint, p256dh, auth, device_type, user_agent, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(endpoint) DO UPDATE SET
+                    user_email = excluded.user_email,
+                    p256dh = excluded.p256dh,
+                    auth = excluded.auth,
+                    device_type = excluded.device_type,
+                    user_agent = excluded.user_agent,
+                    updated_at = excluded.updated_at
+                """,
+                (clean_email, endpoint, p256dh, auth, device_type, user_agent[:250], now, now),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Erro ao salvar assinatura Web Push: {e}")
+        return False
+
+
+def get_user_web_push_subscriptions(user_email: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Lista todas as assinaturas Web Push ativas do usuário (ou todas se não informado)."""
+    clean_email = (user_email or "").strip().lower()
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            if clean_email:
+                cur.execute(
+                    "SELECT * FROM web_push_subscriptions WHERE lower(user_email) = ? ORDER BY updated_at DESC",
+                    (clean_email,),
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+                if rows:
+                    return rows
+            cur.execute("SELECT * FROM web_push_subscriptions ORDER BY updated_at DESC")
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def send_web_push_notification(subscription: Dict[str, Any], payload_data: Dict[str, Any]) -> bool:
+    """Envia uma notificação Web Push criptografada (RFC 8291 aes128gcm + RFC 8292 VAPID ES256) sem dependências externas."""
+    import os as _os
+    import struct
+    from urllib.parse import urlparse
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    endpoint = subscription.get("endpoint") or ""
+    p256dh_b64 = subscription.get("p256dh") or ""
+    auth_b64 = subscription.get("auth") or ""
+    if not endpoint or not p256dh_b64 or not auth_b64:
+        return False
+
+    vapid = get_or_create_vapid_keys()
+    if not vapid.get("public_key") or not vapid.get("private_key"):
+        return False
+
+    try:
+        # 1. Criptografia RFC 8291 (aes128gcm)
+        ua_pub_bytes = _b64url_decode(p256dh_b64)
+        auth_secret = _b64url_decode(auth_b64)
+        ua_pub_key = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), ua_pub_bytes)
+
+        as_priv_key = ec.generate_private_key(ec.SECP256R1())
+        as_pub_bytes = as_priv_key.public_key().public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint,
+        )
+        shared_secret = as_priv_key.exchange(ec.ECDH(), ua_pub_key)
+
+        key_info = b"WebPush: info\x00" + ua_pub_bytes + as_pub_bytes
+        ikm = HKDF(algorithm=hashes.SHA256(), length=32, salt=auth_secret, info=key_info).derive(shared_secret)
+
+        salt = _os.urandom(16)
+        cek = HKDF(algorithm=hashes.SHA256(), length=16, salt=salt, info=b"Content-Encoding: aes128gcm\x00").derive(ikm)
+        nonce = HKDF(algorithm=hashes.SHA256(), length=12, salt=salt, info=b"Content-Encoding: nonce\x00").derive(ikm)
+
+        plaintext = json.dumps(payload_data, ensure_ascii=False).encode("utf-8") + b"\x02"
+        ciphertext = AESGCM(cek).encrypt(nonce, plaintext, None)
+        body = salt + struct.pack(">I", 4096) + bytes([len(as_pub_bytes)]) + as_pub_bytes + ciphertext
+
+        # 2. Assinatura VAPID JWT (ES256)
+        parsed = urlparse(endpoint)
+        aud = f"{parsed.scheme}://{parsed.netloc}"
+        jwt_header = _b64url_encode(json.dumps({"typ": "JWT", "alg": "ES256"}, separators=(",", ":")).encode("utf-8"))
+        jwt_claims = _b64url_encode(
+            json.dumps(
+                {"aud": aud, "exp": int(time.time()) + 43200, "sub": "mailto:admin@betea.com.br"},
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        signing_input = f"{jwt_header}.{jwt_claims}".encode("ascii")
+
+        priv_int = int.from_bytes(_b64url_decode(vapid["private_key"]), "big")
+        vapid_priv_key = ec.derive_private_key(priv_int, ec.SECP256R1())
+        der_sig = vapid_priv_key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+        r, s = decode_dss_signature(der_sig)
+        raw_sig = _b64url_encode(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+        jwt_token = f"{jwt_header}.{jwt_claims}.{raw_sig}"
+
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-Encoding": "aes128gcm",
+            "TTL": "86400",
+            "Urgency": "high",
+            "Authorization": f"vapid t={jwt_token}, k={vapid['public_key']}",
+        }
+        resp = requests.post(endpoint, data=body, headers=headers, timeout=10)
+        if resp.status_code in (404, 410):
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("DELETE FROM web_push_subscriptions WHERE endpoint = ?", (endpoint,))
+                conn.commit()
+            return False
+        return 200 <= resp.status_code < 300
+    except Exception as e:
+        logger.debug(f"Falha ao enviar Web Push para {endpoint[:50]}: {e}")
+        return False
+
+
+def dispatch_mobile_chat_notification(
+    user_email: Optional[str],
+    title: str,
+    body: str,
+    prompt: str = "",
+    task_id: str = "",
+    duration_sec: int = 0,
+    session_id: str = "",
+    is_error: bool = False,
+    skip_telegram: bool = False,
+) -> Dict[str, Any]:
+    """Dispara notificação real no celular do usuário (via Telegram Mobile + Web Push Nativo VAPID)."""
+    sent_telegram = False
+    sent_webpush = 0
+
+    # 1. Envia Web Push Nativo (VAPID) para todos os dispositivos celulares/navegadores inscritos
+    subs = get_user_web_push_subscriptions(user_email)
+    clean_body_preview = (body or "").strip()
+    if len(clean_body_preview) > 220:
+        clean_body_preview = clean_body_preview[:220] + "..."
+    push_payload = {
+        "title": title,
+        "body": clean_body_preview or "O agente concluiu sua solicitação no Chat Operacional.",
+        "icon": "/icon-192.png",
+        "badge": "/icon-192.png",
+        "tag": f"aiboard-task-{task_id or int(time.time())}",
+        "data": {
+            "url": f"/?sessionId={session_id}" if session_id else "/",
+            "sessionId": session_id,
+            "taskId": task_id,
+        },
+    }
+    for sub in subs:
+        if send_web_push_notification(sub, push_payload):
+            sent_webpush += 1
+
+    # 2. Envia Notificação Mobile Instantânea no Telegram do usuário
+    if not skip_telegram:
+        target_chats = get_active_approver_chat_ids()
+        icon = "⚠️" if is_error else "📱"
+        clean_prompt = (prompt or "").replace("<", "&lt;").replace(">", "&gt;").strip()
+        if len(clean_prompt) > 220:
+            clean_prompt = clean_prompt[:220] + "..."
+        prompt_line = f"💬 <b>Pergunta:</b> <i>{clean_prompt}</i>\n" if clean_prompt else ""
+        time_line = f"⏱ <b>Tempo:</b> {duration_sec}s\n" if duration_sec > 0 else ""
+        id_line = f" (ID: <code>{task_id}</code>)" if task_id else ""
+
+        tg_message = (
+            f"{icon} <b>{title}</b>{id_line}\n"
+            f"{prompt_line}"
+            f"{time_line}"
+            f"────────────────────\n\n"
+            f"{body}"
+        )
+        for cid in target_chats:
+            if _notify_telegram(cid, tg_message, parse_mode="HTML"):
+                sent_telegram = True
+
+    return {
+        "sent_telegram": sent_telegram,
+        "sent_webpush": sent_webpush,
+        "total_channels": (1 if sent_telegram else 0) + sent_webpush,
+    }
+
+
 def broadcast_action_resolution(action_id: str, resolved_by: str, status: str, message_feedback: str = ""):
     """Atualiza a mensagem em tempo real para todos os aprovadores do Telegram quando uma ação é decidida."""
     act = get_pending_action(action_id)
@@ -2178,6 +2461,27 @@ def _worker_execute_task(task_id: str, crew_name: str, prompt: str, telegram_cha
                 f"────────────────────\n\n"
                 f"{output}",
                 parse_mode="HTML"
+            )
+            if "web:react_console" in actual_requester and is_mobile_chat_notify_enabled(task_row.get("user_email")):
+                dispatch_mobile_chat_notification(
+                    user_email=task_row.get("user_email"),
+                    title="Resposta do Agente • Chat Operacional",
+                    body=output,
+                    prompt=prompt,
+                    task_id=task_id,
+                    duration_sec=duracao,
+                    skip_telegram=True,
+                )
+        elif "web:react_console" in actual_requester and is_mobile_chat_notify_enabled(task_row.get("user_email")):
+            duracao = int(completed_at - started_at)
+            dispatch_mobile_chat_notification(
+                user_email=task_row.get("user_email"),
+                title="Resposta do Agente • Chat Operacional",
+                body=output,
+                prompt=prompt,
+                task_id=task_id,
+                duration_sec=duracao,
+                skip_telegram=False,
             )
 
         # Se for a rotina de Fechamento Contábil JV Rio concluída com sucesso, persiste o estado determinístico de validação do mês

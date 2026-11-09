@@ -27,7 +27,11 @@ import { useLanguage } from '../i18n';
 import {
   notifyAgentResponse,
   getNotificationPermission,
-  requestNotificationPermission
+  requestNotificationPermission,
+  isMobileDevice,
+  subscribeWebPush,
+  fetchMobileNotificationStatus,
+  toggleMobileNotifications
 } from '../utils/notifications';
 import { generateConversationTitle } from '../utils/conversationTitle';
 
@@ -98,6 +102,14 @@ export function ChatConsole({ user, isActive = true }) {
   const [copiedId, setCopiedId] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [notifPermission, setNotifPermission] = useState(() => getNotificationPermission());
+  const [mobileNotifyEnabled, setMobileNotifyEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('aiboard_mobile_notify_enabled') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [mobileToggleBusy, setMobileToggleBusy] = useState(false);
   const [showNotifPromptBanner, setShowNotifPromptBanner] = useState(false);
 
   const isSubmittingRef = useRef(false);
@@ -121,10 +133,48 @@ export function ChatConsole({ user, isActive = true }) {
     return () => window.removeEventListener('aiboard:open-session', handleOpenSession);
   }, []);
 
+  // Sincroniza estado real de Notificações no Celular (Telegram + Web Push VAPID) no servidor
+  useEffect(() => {
+    let mounted = true;
+    fetchMobileNotificationStatus(user?.email).then((st) => {
+      if (!mounted || !st) return;
+      const isEn = Boolean(st.enabled);
+      setMobileNotifyEnabled(isEn);
+      try {
+        localStorage.setItem('aiboard_mobile_notify_enabled', isEn ? 'true' : 'false');
+      } catch {}
+      if (isEn && st.vapid_public_key && getNotificationPermission() === 'granted') {
+        subscribeWebPush(user?.email, st.vapid_public_key);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [user?.email]);
+
   const handleEnableNotifications = async () => {
-    const perm = await requestNotificationPermission();
-    setNotifPermission(perm);
+    if (mobileToggleBusy) return;
+    setMobileToggleBusy(true);
+    const nextState = !mobileNotifyEnabled;
     setShowNotifPromptBanner(false);
+
+    try {
+      setMobileNotifyEnabled(nextState);
+      try {
+        localStorage.setItem('aiboard_mobile_notify_enabled', nextState ? 'true' : 'false');
+      } catch {}
+
+      const res = await toggleMobileNotifications(user?.email, nextState, nextState);
+      if (nextState) {
+        const perm = await requestNotificationPermission();
+        setNotifPermission(perm);
+        if (perm === 'granted' && res?.vapid_public_key) {
+          await subscribeWebPush(user?.email, res.vapid_public_key);
+        }
+      }
+    } finally {
+      setMobileToggleBusy(false);
+    }
   };
 
   const formatTaskTime = (rawTs) => {
@@ -662,7 +712,7 @@ export function ChatConsole({ user, isActive = true }) {
 
     setPrompt('');
     setLoading(true);
-    if (notifPermission === 'default') {
+    if (!mobileNotifyEnabled && isMobileDevice()) {
       setShowNotifPromptBanner(true);
     }
 
@@ -926,36 +976,29 @@ export function ChatConsole({ user, isActive = true }) {
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Botão de Notificação no Celular/Desktop */}
+            {/* Botão Cross-Device de Notificação no Celular (Telegram + Web Push VAPID) */}
             <button
               onClick={handleEnableNotifications}
+              disabled={mobileToggleBusy}
               title={
-                notifPermission === 'granted'
+                mobileNotifyEnabled
                   ? t('chat.notificationsActive')
-                  : notifPermission === 'denied'
-                  ? t('chat.notificationsBlocked')
                   : t('chat.enableNotifications')
               }
               className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-xl transition cursor-pointer shrink-0 whitespace-nowrap ${
-                notifPermission === 'granted'
+                mobileNotifyEnabled
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                  : notifPermission === 'denied'
-                  ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
                   : 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
               }`}
             >
-              {notifPermission === 'granted' ? (
+              {mobileNotifyEnabled ? (
                 <BellRing className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              ) : notifPermission === 'denied' ? (
-                <BellOff className="w-3.5 h-3.5 text-gray-400 shrink-0" />
               ) : (
                 <Bell className="w-3.5 h-3.5 text-amber-600 shrink-0 animate-bounce" />
               )}
               <span className="hidden sm:inline">
-                {notifPermission === 'granted'
+                {mobileNotifyEnabled
                   ? t('chat.notificationsActive')
-                  : notifPermission === 'denied'
-                  ? t('chat.notificationsBlocked')
                   : t('chat.enableNotifications')}
               </span>
             </button>
@@ -1047,8 +1090,8 @@ export function ChatConsole({ user, isActive = true }) {
           )}
         </div>
 
-        {/* Banner convidando a ativar notificações móveis */}
-        {showNotifPromptBanner && notifPermission === 'default' && (
+        {/* Banner convidando a ativar notificações móveis (apenas quando acessado no celular e ainda desativado) */}
+        {showNotifPromptBanner && !mobileNotifyEnabled && isMobileDevice() && (
           <div className="mt-2 bg-gradient-to-r from-emerald-50 to-[#EFF5F1] border border-emerald-200 rounded-2xl p-2.5 px-3.5 flex items-center justify-between gap-3 text-xs text-[#16422B] shadow-2xs">
             <div className="flex items-center gap-2 min-w-0">
               <span className="p-1.5 rounded-xl bg-emerald-600 text-white shrink-0">

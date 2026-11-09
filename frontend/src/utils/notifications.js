@@ -210,3 +210,107 @@ export function isIOSDevice() {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   );
 }
+
+export function isMobileDevice() {
+  if (typeof window === 'undefined') return false;
+  if (isIOSDevice()) return true;
+  if (/Android|webOS|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(navigator.userAgent)) {
+    return true;
+  }
+  return navigator.maxTouchPoints > 1 && window.innerWidth <= 900;
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+/**
+ * Subscribe current browser/PWA Service Worker to server-sent Web Push (VAPID)
+ */
+export async function subscribeWebPush(userEmail, vapidPublicKey) {
+  if (
+    typeof window === 'undefined' ||
+    !('serviceWorker' in navigator) ||
+    !('PushManager' in window) ||
+    !vapidPublicKey
+  ) {
+    return false;
+  }
+  try {
+    const reg = serviceWorkerRegistration || (await navigator.serviceWorker.ready);
+    if (!reg || !reg.pushManager) return false;
+
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+      });
+    }
+    if (!sub) return false;
+
+    const res = await fetch('/api/notifications/push-subscribe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Email': userEmail || ''
+      },
+      body: JSON.stringify({
+        user_email: userEmail || '',
+        subscription: sub.toJSON(),
+        device_type: isMobileDevice() ? 'mobile' : 'desktop',
+        user_agent: navigator.userAgent || ''
+      })
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn('[PWA] Web Push subscription skipped:', err);
+    return false;
+  }
+}
+
+export async function fetchMobileNotificationStatus(userEmail) {
+  try {
+    const q = userEmail ? `?user_email=${encodeURIComponent(userEmail)}` : '';
+    const res = await fetch(`/api/notifications/mobile-status${q}`, {
+      cache: 'no-store',
+      headers: { 'X-User-Email': userEmail || '' }
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function toggleMobileNotifications(userEmail, enabled, sendConfirmation = true) {
+  try {
+    const res = await fetch('/api/notifications/mobile-toggle', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Email': userEmail || ''
+      },
+      body: JSON.stringify({
+        user_email: userEmail || '',
+        enabled: Boolean(enabled),
+        send_confirmation: Boolean(sendConfirmation)
+      })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (enabled) {
+      playNotificationChime();
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}

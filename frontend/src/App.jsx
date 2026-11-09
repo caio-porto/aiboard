@@ -26,7 +26,8 @@ import {
   subscribeInstallPrompt,
   promptInstallApp,
   isStandaloneApp,
-  isIOSDevice
+  isIOSDevice,
+  isMobileDevice
 } from './utils/notifications';
 
 function AppContent({ user, setUser, companyConfig }) {
@@ -39,9 +40,11 @@ function AppContent({ user, setUser, companyConfig }) {
   const [canInstall, setCanInstall] = useState(false);
   const [showIosModal, setShowIosModal] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
     setIsStandalone(isStandaloneApp());
+    setIsMobile(isMobileDevice());
     const unsub = subscribeInstallPrompt(setCanInstall);
     return unsub;
   }, []);
@@ -358,8 +361,8 @@ function AppContent({ user, setUser, companyConfig }) {
 
         {/* User Profile, Language Selector & Logout */}
         <div className="flex items-center gap-1.5 md:gap-2.5 shrink-0">
-          {/* Botão de Instalar no Celular / PWA */}
-          {!isStandalone && (canInstall || isIOSDevice()) && (
+          {/* Botão de Instalar no Celular / PWA (Exibido apenas em dispositivos móveis) */}
+          {isMobile && !isStandalone && (canInstall || isIOSDevice()) && (
             <button
               onClick={handleInstallClick}
               title={t('chat.installAppDesc')}

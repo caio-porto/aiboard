@@ -1895,6 +1895,104 @@ def cancel_task_endpoint(task_id: str, user: Dict[str, Any] = Depends(require_au
         raise HTTPException(status_code=400, detail="Não foi possível cancelar a tarefa ou ela já foi finalizada.")
     return {"status": "success", "message": f"Tarefa {task_id} cancelada com sucesso!"}
 
+
+# --- NOTIFICAÇÕES NO CELULAR (CROSS-DEVICE: DESKTOP -> CELULAR VIA TELEGRAM + WEB PUSH VAPID) ---
+class MobileToggleRequest(BaseModel):
+    user_email: Optional[str] = None
+    enabled: bool = True
+    send_confirmation: bool = True
+
+
+class PushSubscribeRequest(BaseModel):
+    user_email: Optional[str] = None
+    subscription: Dict[str, Any]
+    device_type: Optional[str] = "mobile"
+    user_agent: Optional[str] = ""
+
+
+@app.get("/api/notifications/mobile-status")
+def get_mobile_notification_status(
+    user_email: Optional[str] = None,
+    x_user_email: Optional[str] = Header(None),
+):
+    from api.tasks_queue import (
+        is_mobile_chat_notify_enabled,
+        get_or_create_vapid_keys,
+        get_user_web_push_subscriptions,
+        get_active_approver_chat_ids,
+    )
+    email = (user_email or x_user_email or "").strip().lower()
+    enabled = is_mobile_chat_notify_enabled(email)
+    vapid = get_or_create_vapid_keys()
+    subs = get_user_web_push_subscriptions(email)
+    tg_chats = get_active_approver_chat_ids()
+    tg_token = bool(os.getenv("TELEGRAM_BOT_TOKEN") or get_setting("telegram_bot_token"))
+    return {
+        "status": "ok",
+        "enabled": enabled,
+        "vapid_public_key": vapid.get("public_key", ""),
+        "telegram_connected": bool(tg_token and len(tg_chats) > 0),
+        "web_push_devices": len(subs),
+    }
+
+
+@app.post("/api/notifications/mobile-toggle")
+def toggle_mobile_notifications(
+    req: MobileToggleRequest,
+    x_user_email: Optional[str] = Header(None),
+):
+    from api.tasks_queue import (
+        set_mobile_chat_notify_enabled,
+        dispatch_mobile_chat_notification,
+        get_or_create_vapid_keys,
+    )
+    email = (req.user_email or x_user_email or "admin@localhost").strip().lower()
+    enabled = set_mobile_chat_notify_enabled(email, req.enabled)
+    vapid = get_or_create_vapid_keys()
+
+    dispatch_res = {"sent_telegram": False, "sent_webpush": 0}
+    if enabled and req.send_confirmation:
+        dispatch_res = dispatch_mobile_chat_notification(
+            user_email=email,
+            title="Notificações no Celular Ativadas!",
+            body=(
+                "A partir de agora, sempre que um agente concluir uma resposta no Chat Operacional "
+                "(mesmo quando você perguntar pelo computador), você receberá o aviso e a resposta "
+                "diretamente aqui no seu celular."
+            ),
+            prompt="",
+            task_id="",
+            duration_sec=0,
+        )
+
+    return {
+        "status": "ok",
+        "enabled": enabled,
+        "vapid_public_key": vapid.get("public_key", ""),
+        "dispatched": dispatch_res,
+    }
+
+
+@app.post("/api/notifications/push-subscribe")
+def subscribe_web_push_endpoint(
+    req: PushSubscribeRequest,
+    x_user_email: Optional[str] = Header(None),
+):
+    from api.tasks_queue import (
+        save_web_push_subscription,
+        set_mobile_chat_notify_enabled,
+    )
+    email = (req.user_email or x_user_email or "admin@localhost").strip().lower()
+    ok = save_web_push_subscription(
+        user_email=email,
+        subscription=req.subscription,
+        device_type=req.device_type or "mobile",
+        user_agent=req.user_agent or "",
+    )
+    if ok:
+        set_mobile_chat_notify_enabled(email, True)
+    return {"status": "ok" if ok else "error", "subscribed": ok}
+
 # --- COMPARTILHAMENTO DE BOLETINS E RELATÓRIOS DA IA ---
 class TaskShareEmailRequest(BaseModel):
     recipients: Optional[List[str]] = Field(None, description="Destinatários do e-mail")
